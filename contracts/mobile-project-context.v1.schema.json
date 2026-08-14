@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:atlas:contract:atlas.mobile-project-context.v1",
+  "title": "ATLAS Mobile Project Context V1",
+  "$comment": "Secret-free text and exact authority/scope invariants are revalidated by MobileProjectContext.fromJson before UI projection.",
+  "x-atlas-application-validator": "MobileProjectContext.fromJson",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contract", "project_identity_authority", "profile_identity_authority", "coordination_authority", "project_id", "profile_id", "name", "slug", "core", "continuity_status", "conversation_id"],
+  "properties": {
+    "contract": {"const": "atlas.mobile-project-context.v1"},
+    "project_identity_authority": {"const": "document-service"},
+    "profile_identity_authority": {"const": "profile-service"},
+    "coordination_authority": {"const": "coordination-core"},
+    "project_id": {"type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},
+    "profile_id": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{1,63}$"},
+    "name": {"type": "string", "minLength": 1, "maxLength": 240},
+    "slug": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,119}$"},
+    "core": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["objective", "current_state", "current_focus", "open_questions"],
+          "properties": {
+            "objective": {"type": ["string", "null"], "minLength": 1, "maxLength": 4000},
+            "current_state": {"type": ["string", "null"], "minLength": 1, "maxLength": 4000},
+            "current_focus": {"type": ["string", "null"], "minLength": 1, "maxLength": 4000},
+            "open_questions": {"type": "array", "maxItems": 50, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 1000}}
+          }
+        }
+      ]
+    },
+    "continuity_status": {"type": ["string", "null"], "enum": ["ACTIVE", "PAUSED", null]},
+    "conversation_id": {"type": ["string", "null"], "pattern": "^[^\\s]{1,240}$"}
+  }
+}

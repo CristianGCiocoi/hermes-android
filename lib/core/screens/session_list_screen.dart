@@ -5,11 +5,13 @@ import '../services/connection_manager.dart';
 import '../services/desktop_gateway_client.dart';
 import '../services/gateway_turn_application_controller.dart';
 import '../services/ws_client.dart';
+import '../services/atlas_project_port.dart';
 import 'chat_screen.dart';
 import 'settings_screen.dart';
 import 'memory_screen.dart';
 import 'cron_screen.dart';
 import 'skills_screen.dart';
+import 'projects_screen.dart';
 
 Future<String?> showSessionNameDialog({
   required BuildContext context,
@@ -47,10 +49,14 @@ Future<String?> showSessionNameDialog({
 class SessionListScreen extends StatefulWidget {
   final SavedConnection connection;
   final GatewayTurnApplicationController turnApplicationController;
+  final ProjectCatalogController? projectCatalogController;
+  final String? canonicalProjectProfileId;
 
   const SessionListScreen({
     required this.connection,
     required this.turnApplicationController,
+    this.projectCatalogController,
+    this.canonicalProjectProfileId,
     super.key,
   });
 
@@ -467,6 +473,18 @@ class _SessionListScreenState extends State<SessionListScreen> {
               onTap: () =>
                   _openScreen(SkillsScreen(connection: widget.connection)),
             ),
+            if (widget.projectCatalogController != null &&
+                widget.canonicalProjectProfileId != null)
+              ListTile(
+                leading: const Icon(Icons.account_tree_outlined),
+                title: const Text('Projects'),
+                onTap: () => _openScreen(
+                  ProjectsScreen(
+                    controller: widget.projectCatalogController!,
+                    canonicalProfileId: widget.canonicalProjectProfileId!,
+                  ),
+                ),
+              ),
             const Divider(),
             ListTile(
               leading: const Icon(Icons.settings),
