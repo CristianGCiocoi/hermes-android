@@ -143,12 +143,18 @@ void main() {
   });
 
   test('rejects URI userinfo credentials in text and provenance', () {
-    final textLeak = context();
-    textLeak['name'] = 'https://user:password@example.test/project';
-    expect(
-      () => MobileProjectContext.fromJson(textLeak),
-      throwsFormatException,
-    );
+    for (final leak in [
+      'https://user:password@example.test/project',
+      'https://user%3Apassword@example.test/project',
+      'https://opaque-token@example.test/project',
+    ]) {
+      final textLeak = context();
+      textLeak['name'] = leak;
+      expect(
+        () => MobileProjectContext.fromJson(textLeak),
+        throwsFormatException,
+      );
+    }
     final provenanceLeak = context();
     provenanceLeak['project_projection'] = {
       ...(provenanceLeak['project_projection'] as Map<String, dynamic>),
@@ -159,6 +165,37 @@ void main() {
       throwsFormatException,
     );
   });
+
+  test(
+    'Project Core field and timestamp constraints match mobile contract',
+    () {
+      for (final mutation in [
+        {'objective': ''},
+        {'updated_by': 'x'},
+        {'updated_at': '0000-01-01T00:00:00Z'},
+        {'updated_at': '2025-02-29T00:00:00Z'},
+        {'updated_at': '2026-04-31T00:00:00Z'},
+        {'updated_at': '2026-08-14T12:00:00+99:99'},
+      ]) {
+        final raw = context();
+        raw['project_core'] = {
+          ...(raw['project_core'] as Map<String, dynamic>),
+          ...mutation,
+        };
+        expect(
+          () => MobileProjectContext.fromJson(raw),
+          throwsFormatException,
+          reason: '$mutation',
+        );
+      }
+      final valid = context();
+      valid['project_core'] = {
+        ...(valid['project_core'] as Map<String, dynamic>),
+        'updated_at': '0001-01-01T00:00:00Z',
+      };
+      expect(MobileProjectContext.fromJson(valid).core?.revision, 1);
+    },
+  );
 
   test(
     'controller rejects cross-profile and duplicate Project results',

@@ -10,7 +10,7 @@ final RegExp _secret = RegExp(
   caseSensitive: false,
 );
 final RegExp _uriUserInfo = RegExp(
-  r'[a-z][a-z0-9+.-]*://[^/\s:@]+:[^@\s/]+@',
+  r'[a-z][a-z0-9+.-]*://[^/\s]*@',
   caseSensitive: false,
 );
 
@@ -115,7 +115,8 @@ class MobileProjectCore {
       }
     }
     _timestamp(value, 'updated_at');
-    _string(value, 'updated_by', maxLength: 128);
+    final updatedBy = _string(value, 'updated_by', maxLength: 128);
+    if (updatedBy.length < 2) _invalid('updated_by is too short');
     _boundedJsonNoSecrets(value['provenance'], 'Project Core provenance');
     return MobileProjectCore._(
       projectId: projectId,
@@ -358,7 +359,7 @@ class MobileConversationProjectBinding {
 DateTime _timestamp(Map<String, dynamic> value, String key) {
   final raw = _string(value, key, maxLength: 40);
   final match = RegExp(
-    r'^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$',
+    r'^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,6})?(?:Z|([+-])(\d{2}):(\d{2}))$',
   ).firstMatch(raw);
   if (match == null) _invalid('$key is not a canonical timestamp');
   final year = int.parse(match.group(1)!);
@@ -367,6 +368,8 @@ DateTime _timestamp(Map<String, dynamic> value, String key) {
   final hour = int.parse(match.group(4)!);
   final minute = int.parse(match.group(5)!);
   final second = int.parse(match.group(6)!);
+  final offsetHour = match.group(8) == null ? 0 : int.parse(match.group(8)!);
+  final offsetMinute = match.group(9) == null ? 0 : int.parse(match.group(9)!);
   if (year == 0 ||
       month < 1 ||
       month > 12 ||
@@ -374,7 +377,9 @@ DateTime _timestamp(Map<String, dynamic> value, String key) {
       day > _daysInMonth(year, month) ||
       hour > 23 ||
       minute > 59 ||
-      second > 59) {
+      second > 59 ||
+      offsetHour > 23 ||
+      offsetMinute > 59) {
     _invalid('$key is not a real timestamp');
   }
   return DateTime.parse(raw);
