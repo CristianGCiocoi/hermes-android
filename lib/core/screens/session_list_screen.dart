@@ -258,6 +258,8 @@ class _SessionListScreenState extends State<SessionListScreen> {
     await Future<void>.delayed(kThemeAnimationDuration);
     if (!mounted) return;
     switch (action) {
+      case 'project':
+        await _chooseProjectForSession(session);
       case 'rename':
         await _renameSession(session);
       case 'branch':
@@ -265,6 +267,25 @@ class _SessionListScreenState extends State<SessionListScreen> {
       case 'delete':
         await _confirmDeleteSession(session);
     }
+  }
+
+  Future<void> _chooseProjectForSession(Session session) async {
+    final controller = widget.projectCatalogController;
+    final profileId = widget.canonicalProjectProfileId;
+    if (controller == null || profileId == null || !mounted) return;
+    await Navigator.push<void>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ProjectsScreen(
+          controller: controller,
+          canonicalProfileId: profileId,
+          conversationId: session.id,
+          onProjectSelected: (_) {
+            if (Navigator.canPop(context)) Navigator.pop(context);
+          },
+        ),
+      ),
+    );
   }
 
   Future<void> _fetchSessions() async {
@@ -642,6 +663,15 @@ class _SessionListScreenState extends State<SessionListScreen> {
                       onSelected: (action) =>
                           _handleSessionAction(action, session),
                       itemBuilder: (_) => [
+                        if (widget.projectCatalogController != null &&
+                            widget.canonicalProjectProfileId != null)
+                          const PopupMenuItem(
+                            value: 'project',
+                            child: ListTile(
+                              leading: Icon(Icons.account_tree_outlined),
+                              title: Text('Assign Project'),
+                            ),
+                          ),
                         if (_desktopGateway != null)
                           const PopupMenuItem(
                             value: 'rename',

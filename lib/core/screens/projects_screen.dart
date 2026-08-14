@@ -6,11 +6,13 @@ import '../services/atlas_project_port.dart';
 class ProjectsScreen extends StatefulWidget {
   final ProjectCatalogController controller;
   final String canonicalProfileId;
+  final String? conversationId;
   final ValueChanged<MobileProjectContext>? onProjectSelected;
 
   const ProjectsScreen({
     required this.controller,
     required this.canonicalProfileId,
+    this.conversationId,
     this.onProjectSelected,
     super.key,
   });
@@ -24,6 +26,7 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
   List<MobileProjectContext> _projects = const [];
   String? _error;
   String? _selectedProjectId;
+  String? _bindingProjectId;
   bool _loading = true;
 
   @override
@@ -55,6 +58,34 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
       setState(() => _error = 'Projects are unavailable for this profile.');
     } finally {
       if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _select(MobileProjectContext project) async {
+    if (_bindingProjectId != null) return;
+    final conversationId = widget.conversationId;
+    if (conversationId == null) {
+      setState(() => _selectedProjectId = project.projectId);
+      widget.onProjectSelected?.call(project);
+      return;
+    }
+    setState(() {
+      _bindingProjectId = project.projectId;
+      _error = null;
+    });
+    try {
+      await widget.controller.bind(
+        project: project,
+        conversationId: conversationId,
+      );
+      if (!mounted) return;
+      setState(() => _selectedProjectId = project.projectId);
+      widget.onProjectSelected?.call(project);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _error = 'Project binding was not accepted.');
+    } finally {
+      if (mounted) setState(() => _bindingProjectId = null);
     }
   }
 
@@ -109,18 +140,28 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
                             overflow: TextOverflow.ellipsis,
                           ),
                           selected: selected,
-                          onTap: () {
-                            setState(
-                              () => _selectedProjectId = project.projectId,
-                            );
-                            widget.onProjectSelected?.call(project);
-                          },
+                          onTap: _bindingProjectId == null
+                              ? () => _select(project)
+                              : null,
                           trailing: Wrap(
                             crossAxisAlignment: WrapCrossAlignment.center,
                             spacing: 8,
                             children: [
-                              if (project.continuityStatus != null)
-                                Chip(label: Text(project.continuityStatus!)),
+                              if (_bindingProjectId == project.projectId)
+                                const SizedBox(
+                                  width: 20,
+                                  height: 20,
+                                  child: CircularProgressIndicator(
+                                    key: Key('project-binding'),
+                                    strokeWidth: 2,
+                                  ),
+                                ),
+                              if (project.projection != null)
+                                Chip(
+                                  label: Text(
+                                    project.projection!.continuityStatus,
+                                  ),
+                                ),
                               if (selected)
                                 const Icon(
                                   Icons.check_circle_outline,

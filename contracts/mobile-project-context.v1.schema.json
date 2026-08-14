@@ -2,37 +2,76 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:atlas:contract:atlas.mobile-project-context.v1",
   "title": "ATLAS Mobile Project Context V1",
-  "$comment": "Secret-free text and exact authority/scope invariants are revalidated by MobileProjectContext.fromJson before UI projection.",
+  "$comment": "Project Core and ProjectProjection remain separately shaped owner contracts. Cross-object identity equality, secret-free values and bounded provenance are enforced by MobileProjectContext.fromJson.",
   "x-atlas-application-validator": "MobileProjectContext.fromJson",
   "type": "object",
   "additionalProperties": false,
-  "required": ["contract", "project_identity_authority", "profile_identity_authority", "coordination_authority", "project_id", "profile_id", "name", "slug", "core", "continuity_status", "conversation_id"],
+  "required": ["contract", "project_identity_authority", "profile_identity_authority", "coordination_authority", "project_id", "profile_id", "name", "slug", "project_core", "project_projection"],
   "properties": {
     "contract": {"const": "atlas.mobile-project-context.v1"},
     "project_identity_authority": {"const": "document-service"},
     "profile_identity_authority": {"const": "profile-service"},
     "coordination_authority": {"const": "coordination-core"},
-    "project_id": {"type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},
-    "profile_id": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{1,63}$"},
+    "project_id": {"$ref": "#/$defs/uuid"},
+    "profile_id": {"$ref": "#/$defs/profileId"},
     "name": {"type": "string", "minLength": 1, "maxLength": 240},
     "slug": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,119}$"},
-    "core": {
+    "project_core": {
       "oneOf": [
         {"type": "null"},
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["objective", "current_state", "current_focus", "open_questions"],
+          "required": ["project_id", "objective", "current_state", "current_focus", "open_questions", "revision", "updated_at", "updated_by", "provenance"],
           "properties": {
-            "objective": {"type": ["string", "null"], "minLength": 1, "maxLength": 4000},
-            "current_state": {"type": ["string", "null"], "minLength": 1, "maxLength": 4000},
-            "current_focus": {"type": ["string", "null"], "minLength": 1, "maxLength": 4000},
-            "open_questions": {"type": "array", "maxItems": 50, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 1000}}
+            "project_id": {"$ref": "#/$defs/uuid"},
+            "objective": {"type": ["string", "null"], "maxLength": 8000},
+            "current_state": {"type": ["string", "null"], "maxLength": 8000},
+            "current_focus": {"type": ["string", "null"], "maxLength": 4000},
+            "open_questions": {"type": "array", "maxItems": 100, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 2000}},
+            "revision": {"type": "integer", "minimum": 1},
+            "updated_at": {"$ref": "#/$defs/timestamp"},
+            "updated_by": {"type": "string", "minLength": 2, "maxLength": 128},
+            "provenance": {"type": "object", "maxProperties": 100}
           }
         }
       ]
     },
-    "continuity_status": {"type": ["string", "null"], "enum": ["ACTIVE", "PAUSED", null]},
-    "conversation_id": {"type": ["string", "null"], "pattern": "^[^\\s]{1,240}$"}
+    "project_projection": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["project_id", "profile_id", "continuity_status", "hermes_project_ref", "last_active_at", "revision", "updated_at", "provenance"],
+          "properties": {
+            "project_id": {"$ref": "#/$defs/uuid"},
+            "profile_id": {"$ref": "#/$defs/profileId"},
+            "continuity_status": {"enum": ["ACTIVE", "PAUSED"]},
+            "hermes_project_ref": {"type": ["string", "null"], "pattern": "^hermes-project://[^\\s]{1,240}$"},
+            "last_active_at": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/timestamp"}]},
+            "revision": {"type": "integer", "minimum": 1},
+            "updated_at": {"$ref": "#/$defs/timestamp"},
+            "provenance": {"$ref": "#/$defs/referenceProvenance"}
+          }
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "uuid": {"type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},
+    "profileId": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{1,63}$"},
+    "timestamp": {"type": "string", "pattern": "^[1-9][0-9]{3}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])T(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](?:\\.[0-9]{1,6})?(?:Z|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])$"},
+    "referenceProvenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "changeset_id": {"type": "string", "pattern": "^[A-Z0-9][A-Z0-9-]{1,63}$"},
+        "source_ref": {"type": "string", "maxLength": 512, "pattern": "^[a-z][a-z0-9+.-]*://[^\\s]+$"},
+        "source_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "actor_profile_id": {"$ref": "#/$defs/profileId"},
+        "correlation_id": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[^\\s]+$"}
+      }
+    }
   }
 }

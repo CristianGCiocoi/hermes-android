@@ -1,3 +1,7 @@
+import 'dart:convert';
+
+import 'package:crypto/crypto.dart';
+
 import '../models/atlas_project_context.dart';
 
 abstract interface class AtlasProjectPort {
@@ -53,11 +57,18 @@ class ProjectCatalogController {
   Future<MobileConversationProjectBinding> bind({
     required MobileProjectContext project,
     required String conversationId,
-    required String idempotencyKey,
   }) async {
-    if (!isCanonicalConversationId(conversationId) ||
-        !isSafeIdempotencyKey(idempotencyKey)) {
+    if (!isCanonicalConversationId(conversationId)) {
       throw const FormatException('binding request identity is invalid');
+    }
+    final digest = sha256.convert(
+      utf8.encode(
+        '${project.profileId}\n$conversationId\n${project.projectId}',
+      ),
+    );
+    final idempotencyKey = 'mobile-project-bind:$digest';
+    if (!isSafeIdempotencyKey(idempotencyKey)) {
+      throw const FormatException('binding idempotency identity is invalid');
     }
     final raw = await _port.requestConversationBinding(
       canonicalProfileId: project.profileId,
