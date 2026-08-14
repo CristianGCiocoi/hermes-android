@@ -6,6 +6,8 @@ import '../services/desktop_gateway_client.dart';
 import '../services/gateway_turn_application_controller.dart';
 import '../services/ws_client.dart';
 import '../services/atlas_project_port.dart';
+import '../models/mobile_session_continuity.dart';
+import '../services/session_continuity_port.dart';
 import 'chat_screen.dart';
 import 'settings_screen.dart';
 import 'memory_screen.dart';
@@ -51,12 +53,22 @@ class SessionListScreen extends StatefulWidget {
   final GatewayTurnApplicationController turnApplicationController;
   final ProjectCatalogController? projectCatalogController;
   final String? canonicalProjectProfileId;
+  final SessionContinuityController? sessionContinuityController;
+  final String? canonicalSessionProfileId;
+  final MobileSessionOpenRequest? initialSessionOpenRequest;
+  final ApiClient? apiClient;
+  final Future<void> Function(Session session)? onContinuitySessionAuthorized;
 
   const SessionListScreen({
     required this.connection,
     required this.turnApplicationController,
     this.projectCatalogController,
     this.canonicalProjectProfileId,
+    this.sessionContinuityController,
+    this.canonicalSessionProfileId,
+    this.initialSessionOpenRequest,
+    this.apiClient,
+    this.onContinuitySessionAuthorized,
     super.key,
   });
 
@@ -66,6 +78,7 @@ class SessionListScreen extends StatefulWidget {
 
 class _SessionListScreenState extends State<SessionListScreen> {
   late final ApiClient _client;
+  late final bool _ownsClient;
   DesktopGatewayClient? _desktopGateway;
   final _searchController = TextEditingController();
   List<SavedConnection> _profiles = const [];
@@ -75,15 +88,19 @@ class _SessionListScreenState extends State<SessionListScreen> {
   bool _healthOk = false;
   final Set<String> _deletingSessionIds = {};
   final Set<String> _branchingSessionIds = {};
+  bool _continuityOpenAttempted = false;
 
   @override
   void initState() {
     super.initState();
-    _client = ApiClient(
-      baseUrl: widget.connection.baseUrl,
-      apiKey: widget.connection.apiKey,
-      pathPrefix: widget.connection.gatewayPrefix ?? '',
-    );
+    _ownsClient = widget.apiClient == null;
+    _client =
+        widget.apiClient ??
+        ApiClient(
+          baseUrl: widget.connection.baseUrl,
+          apiKey: widget.connection.apiKey,
+          pathPrefix: widget.connection.gatewayPrefix ?? '',
+        );
     if (widget.connection.desktopGatewayUrl?.trim().isNotEmpty == true) {
       try {
         _desktopGateway = DesktopGatewayClient.fromConnection(
@@ -165,7 +182,7 @@ class _SessionListScreenState extends State<SessionListScreen> {
   void dispose() {
     _searchController.dispose();
     _desktopGateway?.close();
-    _client.close();
+    if (_ownsClient) _client.close();
     super.dispose();
   }
 
@@ -307,12 +324,55 @@ class _SessionListScreenState extends State<SessionListScreen> {
         _sessions = filtered;
         _loading = false;
       });
+      await _openInitialSharedSession();
     } catch (e) {
       if (!mounted) return;
       setState(() {
         _error = e.toString();
         _loading = false;
       });
+    }
+  }
+
+  Future<void> _openInitialSharedSession() async {
+    final controller = widget.sessionContinuityController;
+    final profileId = widget.canonicalSessionProfileId;
+    final request = widget.initialSessionOpenRequest;
+    if (_continuityOpenAttempted ||
+        controller == null ||
+        profileId == null ||
+        request == null ||
+        !mounted) {
+      return;
+    }
+    _continuityOpenAttempted = true;
+    try {
+      final session = await controller.authorizeOpen(
+        request: request,
+        selectedProfileId: profileId,
+        visibleSessions: _sessions,
+      );
+      if (!mounted) return;
+      final authorized = widget.onContinuitySessionAuthorized;
+      if (authorized != null) {
+        await authorized(session);
+        return;
+      }
+      await Navigator.push<void>(
+        context,
+        MaterialPageRoute(
+          builder: (_) => ChatScreen(
+            connection: widget.connection,
+            session: session,
+            turnApplicationController: widget.turnApplicationController,
+          ),
+        ),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Shared session could not be opened.')),
+      );
     }
   }
 
