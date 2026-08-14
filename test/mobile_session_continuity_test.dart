@@ -54,12 +54,22 @@ Session visibleSession([String id = sessionId]) => Session(
   startedAt: 1,
 );
 
+SavedConnection ownerConnection() => SavedConnection(
+  id: 'trusted-owner-profile-route',
+  label: 'Owner verified Pro route',
+  host: 'owner.example.test',
+  port: 443,
+  apiKey: 'test-owner-route',
+  useHttps: true,
+);
+
 class FakeContinuityPort implements HermesSessionContinuityPort {
   Map<String, dynamic> result;
   Object? failure;
   Object? loadFailure;
   HermesSessionVerification? scopedVerification;
   String scopedSessionId;
+  SavedConnection? scopedConnection;
   int calls = 0;
   int loadCalls = 0;
   String? profileId;
@@ -72,6 +82,7 @@ class FakeContinuityPort implements HermesSessionContinuityPort {
     this.loadFailure,
     this.scopedVerification,
     this.scopedSessionId = sessionId,
+    this.scopedConnection,
   });
 
   @override
@@ -96,6 +107,7 @@ class FakeContinuityPort implements HermesSessionContinuityPort {
     if (loadFailure != null) throw loadFailure!;
     return ProfileScopedSession(
       verification: scopedVerification ?? verification,
+      connection: scopedConnection ?? ownerConnection(),
       session: visibleSession(scopedSessionId),
     );
   }
@@ -159,7 +171,8 @@ void main() {
       request: MobileSessionOpenRequest.fromJson(openRequest()),
       selectedProfileId: 'pro',
     );
-    expect(result.id, sessionId);
+    expect(result.session.id, sessionId);
+    expect(result.connection.id, 'trusted-owner-profile-route');
     expect(port.calls, 1);
     expect(port.profileId, 'pro');
     expect(port.id, sessionId);
@@ -303,7 +316,7 @@ void main() {
   ) async {
     SharedPreferences.setMockInitialValues({});
     final port = FakeContinuityPort(verification());
-    Session? authorized;
+    ProfileScopedSession? authorized;
     final mock = MockClient((request) async {
       if (request.url.path == '/health') {
         return http.Response('{}', 200);
@@ -352,14 +365,16 @@ void main() {
             openRequest(),
           ),
           apiClient: api,
-          onContinuitySessionAuthorized: (session) async {
-            authorized = session;
+          onContinuitySessionAuthorized: (scoped) async {
+            authorized = scoped;
           },
         ),
       ),
     );
     await tester.pumpAndSettle();
-    expect(authorized?.id, sessionId);
+    expect(authorized?.session.id, sessionId);
+    expect(authorized?.connection.id, 'trusted-owner-profile-route');
+    expect(authorized?.connection.id, isNot('local-label-not-authority'));
     expect(port.calls, 1);
     expect(find.text('Shared session could not be opened.'), findsNothing);
   });

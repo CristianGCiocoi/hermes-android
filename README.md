@@ -41,7 +41,7 @@ official Hermes Agent or Nous Research release.
 - Native approval, sudo/secret, clarification, reasoning, tool activity,
   notifications, background results, reviews, and subagent status.
 - Persistent reconnect/session resume and defensive retry handling.
-- Optional, disabled-by-default same-profile cross-device open contract. A canonical `(profile_id, session_id)` reference opens only after an injected Hermes owner verification; the client creates no SessionStore and copies no conversation, draft, attachment, credential, scroll, typing, or device state.
+- Optional, disabled-by-default same-profile cross-device open contract. A canonical `(profile_id, session_id)` reference opens only after one injected Hermes owner adapter returns the exact verification, Session, and authenticated Profile route; the client creates no SessionStore and copies no conversation, draft, attachment, credential, scroll, typing, or device state.
 
 See [CHANGELOG.md](CHANGELOG.md) for the complete `.13` change list and
 [docs/HERMESAPK_DEVELOPMENT_LOG.md](docs/HERMESAPK_DEVELOPMENT_LOG.md) for the

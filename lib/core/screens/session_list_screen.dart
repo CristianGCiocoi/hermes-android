@@ -57,7 +57,8 @@ class SessionListScreen extends StatefulWidget {
   final String? canonicalSessionProfileId;
   final MobileSessionOpenRequest? initialSessionOpenRequest;
   final ApiClient? apiClient;
-  final Future<void> Function(Session session)? onContinuitySessionAuthorized;
+  final Future<void> Function(ProfileScopedSession scoped)?
+  onContinuitySessionAuthorized;
 
   const SessionListScreen({
     required this.connection,
@@ -347,22 +348,22 @@ class _SessionListScreenState extends State<SessionListScreen> {
     }
     _continuityOpenAttempted = true;
     try {
-      final session = await controller.authorizeOpen(
+      final scoped = await controller.authorizeOpen(
         request: request,
         selectedProfileId: profileId,
       );
       if (!mounted) return;
       final authorized = widget.onContinuitySessionAuthorized;
       if (authorized != null) {
-        await authorized(session);
+        await authorized(scoped);
         return;
       }
       await Navigator.push<void>(
         context,
         MaterialPageRoute(
           builder: (_) => ChatScreen(
-            connection: widget.connection,
-            session: session,
+            connection: scoped.connection,
+            session: scoped.session,
             turnApplicationController: widget.turnApplicationController,
           ),
         ),

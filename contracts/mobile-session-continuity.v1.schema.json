@@ -53,6 +53,6 @@
       }
     }
   },
-  "$comment": "A session identifier is a reference, never a bearer credential. Opening requires an exact, fresh Hermes owner verification bound to the selected server-owned Profile and a ProfileScopedSession loaded through that same owner adapter. JSON Schema expresses the structural boundary; validateMobileSessionContinuityPayload is mandatory for both variants and additionally enforces secret-marker rejection, calendar validity, and the maximum five-minute receipt lifetime. The contract carries no transcript, draft, scroll, typing, attachment, credential, device identity, or copied conversation state.",
+  "$comment": "A session identifier is a reference, never a bearer credential. Opening requires an exact, fresh Hermes owner verification bound to the selected server-owned Profile and a ProfileScopedSession plus authenticated connection route loaded through that same owner adapter. ChatScreen must use that returned route, never a pre-existing local connection. JSON Schema expresses the structural boundary; validateMobileSessionContinuityPayload is mandatory for both variants and additionally enforces secret-marker rejection, calendar validity, and the maximum five-minute receipt lifetime. The contract carries no transcript, draft, scroll, typing, attachment, credential, device identity, or copied conversation state.",
   "x-atlas-application-validator": "validateMobileSessionContinuityPayload"
 }

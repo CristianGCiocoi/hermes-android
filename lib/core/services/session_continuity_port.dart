@@ -1,4 +1,5 @@
 import '../models/mobile_session_continuity.dart';
+import '../models/connection.dart';
 import '../models/session.dart';
 
 abstract interface class HermesSessionContinuityPort {
@@ -15,10 +16,16 @@ abstract interface class HermesSessionContinuityPort {
 
 class ProfileScopedSession {
   final HermesSessionVerification verification;
+  final SavedConnection connection;
   final Session session;
 
-  ProfileScopedSession({required this.verification, required this.session}) {
-    if (session.runtimeType != Session ||
+  ProfileScopedSession({
+    required this.verification,
+    required this.connection,
+    required this.session,
+  }) {
+    if (connection.runtimeType != SavedConnection ||
+        session.runtimeType != Session ||
         session.id != verification.sessionId) {
       throw const FormatException('Profile-scoped session is invalid.');
     }
@@ -39,7 +46,7 @@ class SessionContinuityController {
   SessionContinuityController(this._port, {DateTime Function()? now})
     : _now = now ?? DateTime.now;
 
-  Future<Session> authorizeOpen({
+  Future<ProfileScopedSession> authorizeOpen({
     required MobileSessionOpenRequest request,
     required String selectedProfileId,
   }) async {
@@ -86,6 +93,6 @@ class SessionContinuityController {
         scoped.session.id != request.sessionId) {
       throw const SessionContinuityDenied();
     }
-    return scoped.session;
+    return scoped;
   }
 }
