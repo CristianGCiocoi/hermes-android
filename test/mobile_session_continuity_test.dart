@@ -57,12 +57,22 @@ Session visibleSession([String id = sessionId]) => Session(
 class FakeContinuityPort implements HermesSessionContinuityPort {
   Map<String, dynamic> result;
   Object? failure;
+  Object? loadFailure;
+  HermesSessionVerification? scopedVerification;
+  String scopedSessionId;
   int calls = 0;
+  int loadCalls = 0;
   String? profileId;
   String? id;
   String? request;
 
-  FakeContinuityPort(this.result, {this.failure});
+  FakeContinuityPort(
+    this.result, {
+    this.failure,
+    this.loadFailure,
+    this.scopedVerification,
+    this.scopedSessionId = sessionId,
+  });
 
   @override
   Future<Map<String, dynamic>> verifyExistingSession({
@@ -76,6 +86,18 @@ class FakeContinuityPort implements HermesSessionContinuityPort {
     request = requestId;
     if (failure != null) throw failure!;
     return result;
+  }
+
+  @override
+  Future<ProfileScopedSession> loadVerifiedSession({
+    required HermesSessionVerification verification,
+  }) async {
+    loadCalls++;
+    if (loadFailure != null) throw loadFailure!;
+    return ProfileScopedSession(
+      verification: scopedVerification ?? verification,
+      session: visibleSession(scopedSessionId),
+    );
   }
 }
 
@@ -110,22 +132,21 @@ void main() {
   });
 
   test('deep link parser accepts one exact route and rejects aliases', () {
-    final valid = MobileSessionOpenRequest.fromUri(
-      Uri.parse(
-        'hermes://session/open?profile_id=pro&session_id=$sessionId&request_id=$requestId',
-      ),
+    final valid = MobileSessionOpenRequest.fromLink(
+      'hermes://session/open?profile_id=pro&session_id=$sessionId&request_id=$requestId',
     );
     expect(valid.sessionId, sessionId);
 
     for (final raw in [
       'hermes://session/open/$sessionId?profile_id=pro&session_id=$sessionId&request_id=$requestId',
       'hermes://sessions/open?profile_id=pro&session_id=$sessionId&request_id=$requestId',
+      'hermes://session/%6fpen?profile_id=pro&session_id=$sessionId&request_id=$requestId',
       'hermes://session/open?profile_id=personal&session_id=$sessionId&request_id=$requestId&token=x',
       'hermes://user@session/open?profile_id=pro&session_id=$sessionId&request_id=$requestId',
       'hermes://session/open?profile_id=pro&profile_id=personal&session_id=$sessionId&request_id=$requestId',
     ]) {
       expect(
-        () => MobileSessionOpenRequest.fromUri(Uri.parse(raw)),
+        () => MobileSessionOpenRequest.fromLink(raw),
         throwsFormatException,
         reason: raw,
       );
@@ -137,13 +158,13 @@ void main() {
     final result = await controller(port).authorizeOpen(
       request: MobileSessionOpenRequest.fromJson(openRequest()),
       selectedProfileId: 'pro',
-      visibleSessions: [visibleSession()],
     );
     expect(result.id, sessionId);
     expect(port.calls, 1);
     expect(port.profileId, 'pro');
     expect(port.id, sessionId);
     expect(port.request, requestId);
+    expect(port.loadCalls, 1);
   });
 
   test('cross-profile request fails before the owner is queried', () async {
@@ -152,11 +173,11 @@ void main() {
       controller(port).authorizeOpen(
         request: MobileSessionOpenRequest.fromJson(openRequest()),
         selectedProfileId: 'personal',
-        visibleSessions: [visibleSession()],
       ),
       throwsA(isA<SessionContinuityDenied>()),
     );
     expect(port.calls, 0);
+    expect(port.loadCalls, 0);
   });
 
   test('receipt must bind exact Profile, session and request', () async {
@@ -172,7 +193,6 @@ void main() {
         controller(port).authorizeOpen(
           request: MobileSessionOpenRequest.fromJson(openRequest()),
           selectedProfileId: 'pro',
-          visibleSessions: [visibleSession()],
         ),
         throwsA(isA<SessionContinuityDenied>()),
         reason: '$receipt',
@@ -201,7 +221,6 @@ void main() {
           controller(FakeContinuityPort(receipt)).authorizeOpen(
             request: MobileSessionOpenRequest.fromJson(openRequest()),
             selectedProfileId: 'pro',
-            visibleSessions: [visibleSession()],
           ),
           throwsA(isA<SessionContinuityDenied>()),
         );
@@ -209,40 +228,41 @@ void main() {
     },
   );
 
-  test(
-    'owner error and unknown or duplicate session have one denial',
-    () async {
-      for (final sessions in <List<Session>>[
-        [],
-        [visibleSession(), visibleSession()],
-      ]) {
-        await expectLater(
-          controller(FakeContinuityPort(verification())).authorizeOpen(
-            request: MobileSessionOpenRequest.fromJson(openRequest()),
-            selectedProfileId: 'pro',
-            visibleSessions: sessions,
-          ),
-          throwsA(
-            isA<SessionContinuityDenied>().having(
-              (error) => error.toString(),
-              'generic message',
-              'Shared session could not be opened.',
-            ),
-          ),
-        );
-      }
+  test('owner error and mismatched scoped session have one denial', () async {
+    for (final port in [
+      FakeContinuityPort(
+        verification(),
+        scopedVerification: HermesSessionVerification.fromJson(
+          verification(profileId: 'personal'),
+        ),
+      ),
+      FakeContinuityPort(verification(), scopedSessionId: 'another-session'),
+      FakeContinuityPort(verification(), loadFailure: StateError('not found')),
+    ]) {
       await expectLater(
-        controller(
-          FakeContinuityPort(verification(), failure: StateError('not found')),
-        ).authorizeOpen(
+        controller(port).authorizeOpen(
           request: MobileSessionOpenRequest.fromJson(openRequest()),
           selectedProfileId: 'pro',
-          visibleSessions: [visibleSession()],
         ),
-        throwsA(isA<SessionContinuityDenied>()),
+        throwsA(
+          isA<SessionContinuityDenied>().having(
+            (error) => error.toString(),
+            'generic message',
+            'Shared session could not be opened.',
+          ),
+        ),
       );
-    },
-  );
+    }
+    await expectLater(
+      controller(
+        FakeContinuityPort(verification(), failure: StateError('not found')),
+      ).authorizeOpen(
+        request: MobileSessionOpenRequest.fromJson(openRequest()),
+        selectedProfileId: 'pro',
+      ),
+      throwsA(isA<SessionContinuityDenied>()),
+    );
+  });
 
   test('calendar-invalid owner timestamps are rejected', () {
     for (final raw in [
@@ -257,6 +277,25 @@ void main() {
         throwsFormatException,
       );
     }
+  });
+
+  test('mandatory application validator closes schema-only invariants', () {
+    for (final invalid in [
+      {...openRequest(), 'session_id': 'token:hidden'},
+      verification(verifiedAt: '2026-04-31T00:00:00Z'),
+      verification(
+        verifiedAt: '2026-08-14T12:01:00Z',
+        expiresAt: '2026-08-14T12:00:00Z',
+      ),
+      verification(
+        verifiedAt: '2026-08-14T12:00:00Z',
+        expiresAt: '2026-08-14T12:06:00Z',
+      ),
+    ]) {
+      expect(validateMobileSessionContinuityPayload(invalid), isFalse);
+    }
+    expect(validateMobileSessionContinuityPayload(openRequest()), isTrue);
+    expect(validateMobileSessionContinuityPayload(verification()), isTrue);
   });
 
   testWidgets('optional UI opens only the owner-verified remote session', (

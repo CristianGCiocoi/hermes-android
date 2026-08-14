@@ -3,7 +3,7 @@ import 'atlas_project_context.dart' show isCanonicalProfileId;
 const mobileSessionContinuityContract = 'atlas.mobile-session-continuity.v1';
 const hermesSessionVerificationContract =
     'atlas.hermes-session-verification.v1';
-const hermesSessionAuthority = 'hermes-per-profile';
+const hermesSessionAuthority = 'hermes-profile-state';
 const profileIdentityAuthority = 'profile-service';
 
 final RegExp _requestId = RegExp(
@@ -102,15 +102,22 @@ class MobileSessionOpenRequest {
     );
   }
 
-  factory MobileSessionOpenRequest.fromUri(Uri uri) {
-    if (uri.scheme != 'hermes' ||
+  factory MobileSessionOpenRequest.fromLink(String raw) {
+    if (raw.isEmpty || raw.length > 1024 || raw.trim() != raw) {
+      _invalid('session continuity link is invalid');
+    }
+    final uri = Uri.tryParse(raw);
+    if (uri == null) _invalid('session continuity link is invalid');
+    final route = raw.split('?').first;
+    if (route != 'hermes://session/open' ||
+        raw.contains('%') ||
+        raw.contains('+') ||
+        uri.scheme != 'hermes' ||
         uri.host != 'session' ||
         uri.path != '/open' ||
         uri.userInfo.isNotEmpty ||
         uri.hasPort ||
         uri.fragment.isNotEmpty ||
-        uri.query.contains('%') ||
-        uri.query.contains('+') ||
         uri.queryParametersAll.length != 3 ||
         uri.queryParametersAll.keys.toSet().difference(const {
           'profile_id',
@@ -138,6 +145,23 @@ class MobileSessionOpenRequest {
     'session_id': sessionId,
     'request_id': requestId,
   };
+}
+
+bool validateMobileSessionContinuityPayload(Map<String, dynamic> value) {
+  try {
+    switch (value['contract']) {
+      case mobileSessionContinuityContract:
+        MobileSessionOpenRequest.fromJson(value);
+        return true;
+      case hermesSessionVerificationContract:
+        HermesSessionVerification.fromJson(value);
+        return true;
+      default:
+        return false;
+    }
+  } catch (_) {
+    return false;
+  }
 }
 
 class HermesSessionVerification {

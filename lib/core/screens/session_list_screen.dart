@@ -350,7 +350,6 @@ class _SessionListScreenState extends State<SessionListScreen> {
       final session = await controller.authorizeOpen(
         request: request,
         selectedProfileId: profileId,
-        visibleSessions: _sessions,
       );
       if (!mounted) return;
       final authorized = widget.onContinuitySessionAuthorized;

@@ -7,6 +7,22 @@ abstract interface class HermesSessionContinuityPort {
     required String sessionId,
     required String requestId,
   });
+
+  Future<ProfileScopedSession> loadVerifiedSession({
+    required HermesSessionVerification verification,
+  });
+}
+
+class ProfileScopedSession {
+  final HermesSessionVerification verification;
+  final Session session;
+
+  ProfileScopedSession({required this.verification, required this.session}) {
+    if (session.runtimeType != Session ||
+        session.id != verification.sessionId) {
+      throw const FormatException('Profile-scoped session is invalid.');
+    }
+  }
 }
 
 class SessionContinuityDenied implements Exception {
@@ -26,7 +42,6 @@ class SessionContinuityController {
   Future<Session> authorizeOpen({
     required MobileSessionOpenRequest request,
     required String selectedProfileId,
-    required List<Session> visibleSessions,
   }) async {
     if (request.runtimeType != MobileSessionOpenRequest ||
         selectedProfileId != request.profileId) {
@@ -59,10 +74,18 @@ class SessionContinuityController {
       throw const SessionContinuityDenied();
     }
 
-    final matches = visibleSessions
-        .where((session) => session.id == request.sessionId)
-        .toList(growable: false);
-    if (matches.length != 1) throw const SessionContinuityDenied();
-    return matches.single;
+    ProfileScopedSession scoped;
+    try {
+      scoped = await _port.loadVerifiedSession(verification: verification);
+    } catch (_) {
+      throw const SessionContinuityDenied();
+    }
+    if (scoped.runtimeType != ProfileScopedSession ||
+        !identical(scoped.verification, verification) ||
+        scoped.verification.profileId != request.profileId ||
+        scoped.session.id != request.sessionId) {
+      throw const SessionContinuityDenied();
+    }
+    return scoped.session;
   }
 }
