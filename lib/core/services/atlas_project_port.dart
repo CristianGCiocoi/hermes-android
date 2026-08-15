@@ -38,6 +38,7 @@ class HermesProject {
   final String name;
   final String? description;
   final bool archived;
+  final bool isActive;
   final MobileProjectContext? atlasContext;
 
   const HermesProject._({
@@ -46,6 +47,7 @@ class HermesProject {
     required this.name,
     required this.description,
     required this.archived,
+    required this.isActive,
     required this.atlasContext,
   });
 
@@ -88,14 +90,35 @@ class HermesProject {
         'native Hermes Project description is invalid',
       );
     }
-    if (value['archived'] is! bool || value['created_at'] is! int) {
+    _optionalNativeString(value['icon'], 'native Hermes Project icon', 64);
+    _optionalNativeString(value['color'], 'native Hermes Project color', 64);
+    final boardSlug = _optionalNativeString(
+      value['board_slug'],
+      'native Hermes Project board slug',
+      64,
+    );
+    _optionalNativeString(
+      value['primary_path'],
+      'native Hermes Project primary path',
+      2048,
+    );
+    if (boardSlug != null &&
+        !RegExp(r'^[a-z0-9][a-z0-9_-]{0,63}$').hasMatch(boardSlug)) {
+      throw const FormatException('native Hermes Project board is invalid');
+    }
+    if (value['archived'] is! bool ||
+        value['created_at'] is! int ||
+        (value['created_at'] as int) < 0) {
       throw const FormatException('native Hermes Project state is invalid');
     }
-    if (value['folders'] is! List ||
-        value['primary_path'] != null && value['primary_path'] is! String) {
+    final folders = value['folders'];
+    if (folders is! List || folders.length > 128) {
       throw const FormatException(
         'native Hermes Project workspace shape drifted',
       );
+    }
+    for (final folder in folders) {
+      _nativeString(folder, 'native Hermes Project folder', 2048);
     }
     return HermesProject._(
       hermesProjectId: id,
@@ -103,6 +126,7 @@ class HermesProject {
       name: name,
       description: description as String?,
       archived: value['archived'] as bool,
+      isActive: false,
       atlasContext: null,
     );
   }
@@ -114,8 +138,19 @@ class HermesProject {
         name: name,
         description: description,
         archived: archived,
+        isActive: isActive,
         atlasContext: context,
       );
+
+  HermesProject withActive(bool value) => HermesProject._(
+    hermesProjectId: hermesProjectId,
+    slug: slug,
+    name: name,
+    description: description,
+    archived: archived,
+    isActive: value,
+    atlasContext: atlasContext,
+  );
 }
 
 class HermesDesktopProjectsPort implements HermesProjectsPort {
@@ -158,9 +193,14 @@ class ProjectCatalogController {
 
     final payload = await _hermes.listProjects();
     if (payload.keys.any((key) => key != 'projects' && key != 'active_id') ||
-        payload['projects'] is! List ||
-        payload['active_id'] != null && payload['active_id'] is! String) {
+        payload['projects'] is! List) {
       throw const FormatException('native Hermes Projects response drifted');
+    }
+    final activeId = payload['active_id'];
+    if (activeId != null &&
+        (activeId is! String ||
+            !RegExp(r'^p_[a-f0-9]{8}$').hasMatch(activeId))) {
+      throw const FormatException('native Hermes active Project is invalid');
     }
     final rawProjects = payload['projects'] as List;
     if (rawProjects.length > 500) {
@@ -176,8 +216,16 @@ class ProjectCatalogController {
     if (native.any((project) => !nativeIds.add(project.hermesProjectId))) {
       throw const FormatException('native Hermes Project identity collision');
     }
+    if (activeId != null && !nativeIds.contains(activeId)) {
+      throw const FormatException('native Hermes active Project is unknown');
+    }
+    final nativeWithActive = native
+        .map(
+          (project) => project.withActive(project.hermesProjectId == activeId),
+        )
+        .toList();
 
-    var joined = native;
+    var joined = nativeWithActive;
     if (atlas != null) {
       final rawContexts = await atlas.listProjectContexts(
         canonicalProfileId: canonicalProfileId!,
@@ -246,30 +294,32 @@ class ProjectCatalogController {
       final context = project.atlasContext;
       if (context == null ||
           canonicalProfileId != context.profileId ||
-          conversationId == null ||
-          !isCanonicalConversationId(conversationId)) {
+          (conversationId != null &&
+              !isCanonicalConversationId(conversationId))) {
         throw const FormatException(
           'ATLAS Project selection identity is invalid',
         );
       }
-      final digest = sha256.convert(
-        utf8.encode(
-          '${context.profileId}\n$conversationId\n${context.projectId}',
-        ),
-      );
-      final idempotencyKey = 'mobile-project-bind:$digest';
-      final raw = await atlas.requestConversationBinding(
-        canonicalProfileId: context.profileId,
-        conversationId: conversationId,
-        projectId: context.projectId,
-        idempotencyKey: idempotencyKey,
-      );
-      binding = MobileConversationProjectBinding.fromJson(raw);
-      if (binding.projectId != context.projectId ||
-          binding.profileId != context.profileId ||
-          binding.conversationId != conversationId ||
-          binding.status != 'ACTIVE') {
-        throw const FormatException('binding receipt does not match request');
+      if (conversationId != null) {
+        final digest = sha256.convert(
+          utf8.encode(
+            '${context.profileId}\n$conversationId\n${context.projectId}',
+          ),
+        );
+        final idempotencyKey = 'mobile-project-bind:$digest';
+        final raw = await atlas.requestConversationBinding(
+          canonicalProfileId: context.profileId,
+          conversationId: conversationId,
+          projectId: context.projectId,
+          idempotencyKey: idempotencyKey,
+        );
+        binding = MobileConversationProjectBinding.fromJson(raw);
+        if (binding.projectId != context.projectId ||
+            binding.profileId != context.profileId ||
+            binding.conversationId != conversationId ||
+            binding.status != 'ACTIVE') {
+          throw const FormatException('binding receipt does not match request');
+        }
       }
     }
 
@@ -293,4 +343,9 @@ String _nativeString(Object? value, String label, int maxLength) {
     throw FormatException('$label is invalid');
   }
   return value;
+}
+
+String? _optionalNativeString(Object? value, String label, int maxLength) {
+  if (value == null) return null;
+  return _nativeString(value, label, maxLength);
 }

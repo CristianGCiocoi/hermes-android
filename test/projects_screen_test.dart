@@ -5,15 +5,16 @@ import 'package:hermes_android/core/services/atlas_project_port.dart';
 
 class ScreenHermesPort implements HermesProjectsPort {
   final bool fail;
+  final String? initialActiveId;
   static int selectionCalls = 0;
 
-  const ScreenHermesPort({this.fail = false});
+  const ScreenHermesPort({this.fail = false, this.initialActiveId});
 
   @override
   Future<Map<String, dynamic>> listProjects() async {
     if (fail) throw StateError('native Projects unavailable');
     return {
-      'active_id': null,
+      'active_id': initialActiveId,
       'projects': [
         {
           'id': 'p_1234abcd',
@@ -163,6 +164,47 @@ void main() {
       selected?.canonicalProjectId,
       '11111111-1111-4111-8111-111111111111',
     );
+    expect(find.byKey(const Key('project-selected')), findsOneWidget);
+  });
+
+  testWidgets(
+    'ATLAS drawer can activate native Project without a conversation',
+    (tester) async {
+      ScreenAtlasPort.bindingCalls = 0;
+      ScreenHermesPort.selectionCalls = 0;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ProjectsScreen(
+            controller: ProjectCatalogController(
+              const ScreenHermesPort(),
+              atlas: const ScreenAtlasPort(),
+            ),
+            canonicalProfileId: 'pro',
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('ATLAS'));
+      await tester.pumpAndSettle();
+      expect(ScreenAtlasPort.bindingCalls, 0);
+      expect(ScreenHermesPort.selectionCalls, 1);
+      expect(find.byKey(const Key('project-selected')), findsOneWidget);
+    },
+  );
+
+  testWidgets('native active Project is represented on first render', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ProjectsScreen(
+          controller: ProjectCatalogController(
+            const ScreenHermesPort(initialActiveId: 'p_1234abcd'),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
     expect(find.byKey(const Key('project-selected')), findsOneWidget);
   });
 

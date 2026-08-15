@@ -252,6 +252,63 @@ void main() {
     expect(native.activeId, 'p_1234abcd');
   });
 
+  test('native active Project is preserved and validated', () async {
+    final native = FakeHermesPort()..activeId = 'p_1234abcd';
+    final project = (await ProjectCatalogController(native).list()).single;
+    expect(project.isActive, isTrue);
+
+    native.activeId = 'p_deadbeef';
+    await expectLater(
+      ProjectCatalogController(native).list(),
+      throwsFormatException,
+    );
+  });
+
+  test('native workspace metadata is strictly bounded and secret-free', () {
+    for (final mutation in [
+      {'icon': 1},
+      {'color': 'x' * 65},
+      {'board_slug': 'not valid'},
+      {'primary_path': 'x' * 2049},
+      {'primary_path': 'credential=hidden'},
+      {
+        'folders': [1],
+      },
+      {'folders': List.filled(129, 'workspace')},
+      {
+        'folders': ['authorization=hidden'],
+      },
+      {'created_at': -1},
+    ]) {
+      expect(
+        () => HermesProject.fromNativeJson({...nativeProject(), ...mutation}),
+        throwsFormatException,
+        reason: '$mutation',
+      );
+    }
+  });
+
+  test(
+    'ATLAS-enriched native selection needs binding only for a conversation',
+    () async {
+      final atlas = FakeAtlasPort([context()]);
+      final native = FakeHermesPort();
+      final controller = ProjectCatalogController(native, atlas: atlas);
+      final project = (await controller.list(canonicalProfileId: 'pro')).single;
+
+      expect(
+        await controller.select(
+          project: project,
+          canonicalProfileId: 'pro',
+          conversationId: null,
+        ),
+        isNull,
+      );
+      expect(atlas.bindingCalls, 0);
+      expect(native.activeId, 'p_1234abcd');
+    },
+  );
+
   test(
     'ATLAS enrichment joins through ProjectProjection native binding only',
     () async {

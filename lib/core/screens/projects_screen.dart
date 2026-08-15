@@ -51,7 +51,16 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
         query: _search.text.trim().isEmpty ? null : _search.text.trim(),
       );
       if (!mounted) return;
-      setState(() => _projects = result);
+      setState(() {
+        _projects = result;
+        _selectedProjectId = null;
+        for (final project in result) {
+          if (project.isActive) {
+            _selectedProjectId = project.hermesProjectId;
+            break;
+          }
+        }
+      });
     } catch (_) {
       if (!mounted) return;
       setState(() => _error = 'Projects are unavailable for this profile.');
