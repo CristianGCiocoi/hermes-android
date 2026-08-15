@@ -8,6 +8,7 @@ const otherProjectId = '33333333-3333-4333-8333-333333333333';
 Map<String, dynamic> context({
   String profileId = 'pro',
   String id = projectId,
+  String? hermesProjectId = 'p_1234abcd',
 }) => {
   'contract': 'atlas.mobile-project-context.v1',
   'project_identity_authority': 'document-service',
@@ -32,7 +33,9 @@ Map<String, dynamic> context({
     'project_id': id,
     'profile_id': profileId,
     'continuity_status': 'ACTIVE',
-    'hermes_project_ref': null,
+    'hermes_project_ref': hermesProjectId == null
+        ? null
+        : 'hermes-project://runtime/$hermesProjectId',
     'last_active_at': null,
     'revision': 1,
     'updated_at': '2026-08-14T12:00:00Z',
@@ -40,17 +43,16 @@ Map<String, dynamic> context({
   },
 };
 
-class FakeProjectPort implements AtlasProjectPort {
+class FakeAtlasPort implements AtlasProjectEnrichmentPort {
   List<Map<String, dynamic>> projects;
   int bindingCalls = 0;
   String? lastIdempotencyKey;
 
-  FakeProjectPort(this.projects);
+  FakeAtlasPort(this.projects);
 
   @override
   Future<List<Map<String, dynamic>>> listProjectContexts({
     required String canonicalProfileId,
-    String? query,
   }) async => projects;
 
   @override
@@ -78,6 +80,40 @@ class FakeProjectPort implements AtlasProjectPort {
     };
   }
 }
+
+class FakeHermesPort implements HermesProjectsPort {
+  final List<Map<String, dynamic>> projects;
+  String? activeId;
+
+  FakeHermesPort({List<Map<String, dynamic>>? projects})
+    : projects = projects ?? [nativeProject()];
+
+  @override
+  Future<Map<String, dynamic>> listProjects() async => {
+    'projects': projects,
+    'active_id': activeId,
+  };
+
+  @override
+  Future<Map<String, dynamic>> setActiveProject(String hermesProjectId) async {
+    activeId = hermesProjectId;
+    return {'active_id': hermesProjectId};
+  }
+}
+
+Map<String, dynamic> nativeProject({String id = 'p_1234abcd'}) => {
+  'id': id,
+  'slug': 'atlas',
+  'name': 'ATLAS',
+  'description': 'Native Hermes workspace',
+  'icon': null,
+  'color': null,
+  'board_slug': null,
+  'primary_path': null,
+  'archived': false,
+  'created_at': 1,
+  'folders': <Object>[],
+};
 
 void main() {
   test('accepts only registered authorities and canonical Project UUID', () {
@@ -197,18 +233,64 @@ void main() {
     },
   );
 
+  test('default Hermes Projects work without any ATLAS extension', () async {
+    final native = FakeHermesPort();
+    final controller = ProjectCatalogController(native);
+    final project = (await controller.list()).single;
+
+    expect(project.hermesProjectId, 'p_1234abcd');
+    expect(project.canonicalProjectId, isNull);
+    expect(project.atlasContext, isNull);
+    expect(
+      await controller.select(
+        project: project,
+        canonicalProfileId: null,
+        conversationId: null,
+      ),
+      isNull,
+    );
+    expect(native.activeId, 'p_1234abcd');
+  });
+
+  test(
+    'ATLAS enrichment joins through ProjectProjection native binding only',
+    () async {
+      final controller = ProjectCatalogController(
+        FakeHermesPort(),
+        atlas: FakeAtlasPort([context()]),
+      );
+      final project = (await controller.list(canonicalProfileId: 'pro')).single;
+      expect(project.hermesProjectId, 'p_1234abcd');
+      expect(project.canonicalProjectId, projectId);
+      expect(
+        project.atlasContext?.projection?.hermesProjectRef,
+        'hermes-project://runtime/p_1234abcd',
+      );
+
+      await expectLater(
+        ProjectCatalogController(
+          FakeHermesPort(),
+          atlas: FakeAtlasPort([context(hermesProjectId: 'p_deadbeef')]),
+        ).list(canonicalProfileId: 'pro'),
+        throwsFormatException,
+      );
+    },
+  );
+
   test(
     'controller rejects cross-profile and duplicate Project results',
     () async {
       await expectLater(
         ProjectCatalogController(
-          FakeProjectPort([context(profileId: 'personal')]),
+          FakeHermesPort(),
+          atlas: FakeAtlasPort([context(profileId: 'personal')]),
         ).list(canonicalProfileId: 'pro'),
         throwsFormatException,
       );
       await expectLater(
         ProjectCatalogController(
-          FakeProjectPort([context(), context()]),
+          FakeHermesPort(),
+          atlas: FakeAtlasPort([context(), context()]),
         ).list(canonicalProfileId: 'pro'),
         throwsFormatException,
       );
@@ -218,8 +300,11 @@ void main() {
   test(
     'malformed profile, query and binding inputs fail before provider use',
     () async {
-      final port = FakeProjectPort([context()]);
-      final controller = ProjectCatalogController(port);
+      final port = FakeAtlasPort([context()]);
+      final controller = ProjectCatalogController(
+        FakeHermesPort(),
+        atlas: port,
+      );
       await expectLater(
         controller.list(canonicalProfileId: 'Local Phone'),
         throwsFormatException,
@@ -228,9 +313,13 @@ void main() {
         controller.list(canonicalProfileId: 'pro', query: ' token=hidden'),
         throwsFormatException,
       );
-      final project = MobileProjectContext.fromJson(context());
+      final project = (await controller.list(canonicalProfileId: 'pro')).single;
       await expectLater(
-        controller.bind(project: project, conversationId: 'bad session'),
+        controller.select(
+          project: project,
+          canonicalProfileId: 'pro',
+          conversationId: 'bad session',
+        ),
         throwsFormatException,
       );
       expect(port.bindingCalls, 0);
@@ -238,19 +327,23 @@ void main() {
   );
 
   test('binding request reuses existing endpoint identities', () async {
-    final port = FakeProjectPort([context()]);
-    final controller = ProjectCatalogController(port);
+    final port = FakeAtlasPort([context()]);
+    final native = FakeHermesPort();
+    final controller = ProjectCatalogController(native, atlas: port);
     final project = (await controller.list(canonicalProfileId: 'pro')).single;
-    final receipt = await controller.bind(
+    final receipt = await controller.select(
       project: project,
+      canonicalProfileId: 'pro',
       conversationId: 'mob-existing-session',
     );
-    expect(receipt.projectId, projectId);
-    expect(receipt.profileId, 'pro');
+    expect(receipt?.projectId, projectId);
+    expect(receipt?.profileId, 'pro');
+    expect(native.activeId, 'p_1234abcd');
     expect(port.bindingCalls, 1);
     final firstKey = port.lastIdempotencyKey;
-    await controller.bind(
+    await controller.select(
       project: project,
+      canonicalProfileId: 'pro',
       conversationId: 'mob-existing-session',
     );
     expect(port.lastIdempotencyKey, firstKey);
@@ -259,9 +352,12 @@ void main() {
   test(
     'binding response must be the registered active relationship shape',
     () async {
-      final port = FakeProjectPort([context()]);
-      final controller = ProjectCatalogController(port);
-      final project = MobileProjectContext.fromJson(context());
+      final port = FakeAtlasPort([context()]);
+      final controller = ProjectCatalogController(
+        FakeHermesPort(),
+        atlas: port,
+      );
+      final project = (await controller.list(canonicalProfileId: 'pro')).single;
       port.projects = [context()];
       final rawBinding = await port.requestConversationBinding(
         canonicalProfileId: 'pro',
@@ -299,8 +395,9 @@ void main() {
         'ACTIVE',
       );
       await expectLater(
-        controller.bind(
+        controller.select(
           project: project,
+          canonicalProfileId: 'pro',
           conversationId: 'mob-existing-session',
         ),
         completes,

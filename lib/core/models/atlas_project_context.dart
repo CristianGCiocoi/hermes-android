@@ -53,6 +53,8 @@ bool isCanonicalConversationId(String value) =>
 bool isSafeProjectQuery(String value) =>
     value == value.trim() && value.length <= 120 && !_containsSecret(value);
 
+bool isSecretFreeProjectValue(String value) => !_containsSecret(value);
+
 bool isSafeIdempotencyKey(String value) =>
     RegExp(r'^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$').hasMatch(value) &&
     !_containsSecret(value);
@@ -133,12 +135,14 @@ class MobileProjectProjection {
   final String projectId;
   final String profileId;
   final String continuityStatus;
+  final String? hermesProjectRef;
   final int revision;
 
   const MobileProjectProjection._({
     required this.projectId,
     required this.profileId,
     required this.continuityStatus,
+    required this.hermesProjectRef,
     required this.revision,
   });
 
@@ -186,6 +190,7 @@ class MobileProjectProjection {
       projectId: projectId,
       profileId: profileId,
       continuityStatus: status as String,
+      hermesProjectRef: hermesRef as String?,
       revision: revision,
     );
   }

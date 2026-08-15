@@ -1933,6 +1933,49 @@ void main() {
       }
     });
 
+    test(
+      'uses upstream Hermes projects.list and projects.set_active',
+      () async {
+        final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+        final requests = <Map<String, dynamic>>[];
+        final socketSubscription = server
+            .transform(WebSocketTransformer())
+            .listen((socket) {
+              socket.listen((raw) {
+                final request =
+                    jsonDecode(raw as String) as Map<String, dynamic>;
+                requests.add(request);
+                socket.add(
+                  jsonEncode({
+                    'jsonrpc': '2.0',
+                    'id': request['id'],
+                    'result': request['method'] == 'projects.list'
+                        ? {'projects': <Object>[], 'active_id': null}
+                        : {'active_id': 'p_1234abcd'},
+                  }),
+                );
+              });
+            });
+        final client = WsClient('http://127.0.0.1:${server.port}');
+
+        try {
+          await client.connect();
+          final catalog = await client.listProjects();
+          final active = await client.setActiveProject('p_1234abcd');
+          expect(catalog['projects'], isEmpty);
+          expect(active['active_id'], 'p_1234abcd');
+          expect(requests[0]['method'], 'projects.list');
+          expect(requests[0]['params'], <String, dynamic>{});
+          expect(requests[1]['method'], 'projects.set_active');
+          expect(requests[1]['params'], {'id': 'p_1234abcd'});
+        } finally {
+          client.close();
+          await socketSubscription.cancel();
+          await server.close(force: true);
+        }
+      },
+    );
+
     test('reads and writes session-scoped reasoning effort', () async {
       final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
       final requests = <Map<String, dynamic>>[];

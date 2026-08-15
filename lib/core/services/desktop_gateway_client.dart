@@ -95,16 +95,19 @@ class DesktopGatewayClient {
   }
 
   Future<_DesktopGatewaySession> _connect(String mobileSessionId) async {
-    final existing = _ws;
-    if (existing != null && existing.isConnected) {
-      final mappedSessionId = _gatewaySessionIds[mobileSessionId];
-      if (mappedSessionId != null) {
-        return _DesktopGatewaySession(existing, mappedSessionId);
-      }
-      final gatewaySessionId = await _resumeOrCreate(existing, mobileSessionId);
-      _gatewaySessionIds[mobileSessionId] = gatewaySessionId;
-      return _DesktopGatewaySession(existing, gatewaySessionId);
+    final client = await _connectSocket();
+    final mappedSessionId = _gatewaySessionIds[mobileSessionId];
+    if (mappedSessionId != null) {
+      return _DesktopGatewaySession(client, mappedSessionId);
     }
+    final gatewaySessionId = await _resumeOrCreate(client, mobileSessionId);
+    _gatewaySessionIds[mobileSessionId] = gatewaySessionId;
+    return _DesktopGatewaySession(client, gatewaySessionId);
+  }
+
+  Future<WsClient> _connectSocket() async {
+    final existing = _ws;
+    if (existing != null && existing.isConnected) return existing;
 
     _connectionListener?.call(
       existing == null
@@ -127,9 +130,7 @@ class DesktopGatewayClient {
     try {
       await client.connect();
       _ws = client;
-      final gatewaySessionId = await _resumeOrCreate(client, mobileSessionId);
-      _gatewaySessionIds[mobileSessionId] = gatewaySessionId;
-      return _DesktopGatewaySession(client, gatewaySessionId);
+      return client;
     } catch (_) {
       client.close();
       if (identical(_ws, client)) _ws = null;
@@ -343,6 +344,20 @@ class DesktopGatewayClient {
   }) async {
     final gateway = await _connect(sessionId);
     return gateway.client.branchSession(gateway.sessionId, name: name);
+  }
+
+  /// Reads the upstream Hermes per-profile Projects store through its native
+  /// JSON-RPC surface. No ATLAS service or identity is involved.
+  Future<Map<String, dynamic>> listProjects() async {
+    final client = await _connectSocket();
+    return client.listProjects();
+  }
+
+  /// Selects an existing upstream Hermes runtime Project. The identifier is
+  /// Hermes-owned projection metadata, never canonical ATLAS Project identity.
+  Future<Map<String, dynamic>> setActiveProject(String hermesProjectId) async {
+    final client = await _connectSocket();
+    return client.setActiveProject(hermesProjectId);
   }
 
   void close() {

@@ -81,6 +81,7 @@ class _SessionListScreenState extends State<SessionListScreen> {
   late final ApiClient _client;
   late final bool _ownsClient;
   DesktopGatewayClient? _desktopGateway;
+  late final ProjectCatalogController? _projectCatalogController;
   final _searchController = TextEditingController();
   List<SavedConnection> _profiles = const [];
   List<Session> _sessions = [];
@@ -111,6 +112,13 @@ class _SessionListScreenState extends State<SessionListScreen> {
         _desktopGateway = null;
       }
     }
+    _projectCatalogController =
+        widget.projectCatalogController ??
+        (_desktopGateway == null
+            ? null
+            : ProjectCatalogController(
+                HermesDesktopProjectsPort(_desktopGateway!),
+              ));
     _loadProfiles();
     _checkHealth();
   }
@@ -288,9 +296,13 @@ class _SessionListScreenState extends State<SessionListScreen> {
   }
 
   Future<void> _chooseProjectForSession(Session session) async {
-    final controller = widget.projectCatalogController;
+    final controller = _projectCatalogController;
     final profileId = widget.canonicalProjectProfileId;
-    if (controller == null || profileId == null || !mounted) return;
+    if (controller == null ||
+        controller.atlasEnrichmentEnabled && profileId == null ||
+        !mounted) {
+      return;
+    }
     await Navigator.push<void>(
       context,
       MaterialPageRoute(
@@ -554,15 +566,16 @@ class _SessionListScreenState extends State<SessionListScreen> {
               onTap: () =>
                   _openScreen(SkillsScreen(connection: widget.connection)),
             ),
-            if (widget.projectCatalogController != null &&
-                widget.canonicalProjectProfileId != null)
+            if (_projectCatalogController != null &&
+                (!_projectCatalogController.atlasEnrichmentEnabled ||
+                    widget.canonicalProjectProfileId != null))
               ListTile(
                 leading: const Icon(Icons.account_tree_outlined),
                 title: const Text('Projects'),
                 onTap: () => _openScreen(
                   ProjectsScreen(
-                    controller: widget.projectCatalogController!,
-                    canonicalProfileId: widget.canonicalProjectProfileId!,
+                    controller: _projectCatalogController,
+                    canonicalProfileId: widget.canonicalProjectProfileId,
                   ),
                 ),
               ),
@@ -723,8 +736,10 @@ class _SessionListScreenState extends State<SessionListScreen> {
                       onSelected: (action) =>
                           _handleSessionAction(action, session),
                       itemBuilder: (_) => [
-                        if (widget.projectCatalogController != null &&
-                            widget.canonicalProjectProfileId != null)
+                        if (_projectCatalogController != null &&
+                            (!_projectCatalogController
+                                    .atlasEnrichmentEnabled ||
+                                widget.canonicalProjectProfileId != null))
                           const PopupMenuItem(
                             value: 'project',
                             child: ListTile(

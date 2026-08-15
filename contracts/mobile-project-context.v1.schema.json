@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:atlas:contract:atlas.mobile-project-context.v1",
   "title": "ATLAS Mobile Project Context V1",
-  "$comment": "Project Core and ProjectProjection remain separately shaped owner contracts. Cross-object identity equality, secret-free values and bounded provenance are enforced by MobileProjectContext.fromJson.",
+  "$comment": "Optional ATLAS enrichment for one native Hermes Project. Project Core and ProjectProjection remain separately shaped owner contracts; ProjectProjection.hermes_project_ref binds this enrichment to the upstream Hermes runtime Project. This contract is not a second Project catalog or identity. Cross-object identity equality, secret-free values and bounded provenance are enforced by MobileProjectContext.fromJson.",
   "x-atlas-application-validator": "MobileProjectContext.fromJson",
   "type": "object",
   "additionalProperties": false,

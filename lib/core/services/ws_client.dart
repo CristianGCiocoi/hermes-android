@@ -847,6 +847,42 @@ class WsClient {
     throw JsonRpcError('session.branch', 'Gateway returned no branch');
   }
 
+  Future<Map<String, dynamic>> listProjects() async {
+    final response = await send('projects.list', const {});
+    final error = response['error'];
+    if (error != null) {
+      throw _gatewayResponseError(
+        'projects.list',
+        error,
+        fallbackMessage: 'Could not list Hermes Projects',
+      );
+    }
+    final result = response['result'];
+    if (result is Map<String, dynamic>) return result;
+    throw JsonRpcError('projects.list', 'Gateway returned no Projects catalog');
+  }
+
+  Future<Map<String, dynamic>> setActiveProject(String projectId) async {
+    if (!RegExp(r'^p_[a-f0-9]{8}$').hasMatch(projectId)) {
+      throw const FormatException('native Hermes Project id is invalid');
+    }
+    final response = await send('projects.set_active', {'id': projectId});
+    final error = response['error'];
+    if (error != null) {
+      throw _gatewayResponseError(
+        'projects.set_active',
+        error,
+        fallbackMessage: 'Could not select Hermes Project',
+      );
+    }
+    final result = response['result'];
+    if (result is Map<String, dynamic>) return result;
+    throw JsonRpcError(
+      'projects.set_active',
+      'Gateway returned no active Project',
+    );
+  }
+
   /// Submit a message to the active session with streaming.
   /// Returns the final response and streams events via callback.
   Future<String> sendMessageStreaming(

@@ -1,10 +1,9 @@
 # Hermes Android — Remote Gateway Community Edition
 
-> ATLAS development note: the optional `ProjectsScreen` and
-> `ProjectCatalogController` are a disabled, provider-injected CS-050 candidate.
-> They consume owner-attributed Project/Profile/Coordination contracts and do
-> not create a device Project store or become active without later runtime
-> configuration and deployment authorization.
+> Projects use the upstream Hermes per-profile `projects.*` JSON-RPC surface
+> and native Hermes Project identifiers. ATLAS may add optional canonical
+> Project/Profile/Coordination enrichment through `ProjectProjection`; it does
+> not add a second Projects store, identity, screen, or navigation system.
 
 Android client for [Hermes Agent](https://hermes-agent.nousresearch.com/) — chat with your Hermes sessions from a phone or tablet over local Wi-Fi or a private Tailscale network.
 

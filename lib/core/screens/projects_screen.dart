@@ -1,17 +1,16 @@
 import 'package:flutter/material.dart';
 
-import '../models/atlas_project_context.dart';
 import '../services/atlas_project_port.dart';
 
 class ProjectsScreen extends StatefulWidget {
   final ProjectCatalogController controller;
-  final String canonicalProfileId;
+  final String? canonicalProfileId;
   final String? conversationId;
-  final ValueChanged<MobileProjectContext>? onProjectSelected;
+  final ValueChanged<HermesProject>? onProjectSelected;
 
   const ProjectsScreen({
     required this.controller,
-    required this.canonicalProfileId,
+    this.canonicalProfileId,
     this.conversationId,
     this.onProjectSelected,
     super.key,
@@ -23,7 +22,7 @@ class ProjectsScreen extends StatefulWidget {
 
 class _ProjectsScreenState extends State<ProjectsScreen> {
   final _search = TextEditingController();
-  List<MobileProjectContext> _projects = const [];
+  List<HermesProject> _projects = const [];
   String? _error;
   String? _selectedProjectId;
   String? _bindingProjectId;
@@ -61,29 +60,25 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
     }
   }
 
-  Future<void> _select(MobileProjectContext project) async {
+  Future<void> _select(HermesProject project) async {
     if (_bindingProjectId != null) return;
     final conversationId = widget.conversationId;
-    if (conversationId == null) {
-      setState(() => _selectedProjectId = project.projectId);
-      widget.onProjectSelected?.call(project);
-      return;
-    }
     setState(() {
-      _bindingProjectId = project.projectId;
+      _bindingProjectId = project.hermesProjectId;
       _error = null;
     });
     try {
-      await widget.controller.bind(
+      await widget.controller.select(
         project: project,
+        canonicalProfileId: widget.canonicalProfileId,
         conversationId: conversationId,
       );
       if (!mounted) return;
-      setState(() => _selectedProjectId = project.projectId);
+      setState(() => _selectedProjectId = project.hermesProjectId);
       widget.onProjectSelected?.call(project);
     } catch (_) {
       if (!mounted) return;
-      setState(() => _error = 'Project binding was not accepted.');
+      setState(() => _error = 'Project selection was not accepted.');
     } finally {
       if (mounted) setState(() => _bindingProjectId = null);
     }
@@ -103,7 +98,7 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
               textInputAction: TextInputAction.search,
               onSubmitted: (_) => _load(),
               decoration: InputDecoration(
-                labelText: 'Search canonical Projects',
+                labelText: 'Search Hermes Projects',
                 suffixIcon: IconButton(
                   tooltip: 'Search',
                   onPressed: _loading ? null : _load,
@@ -121,21 +116,22 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
           if (!_loading && _error == null)
             Expanded(
               child: _projects.isEmpty
-                  ? const Center(child: Text('No Projects available.'))
+                  ? const Center(child: Text('No Hermes Projects available.'))
                   : ListView.builder(
                       itemCount: _projects.length,
                       itemBuilder: (context, index) {
                         final project = _projects[index];
                         final selected =
-                            project.projectId == _selectedProjectId;
+                            project.hermesProjectId == _selectedProjectId;
                         return ListTile(
-                          key: Key('project-${project.projectId}'),
+                          key: Key('project-${project.hermesProjectId}'),
                           leading: const Icon(Icons.account_tree_outlined),
                           title: Text(project.name),
                           subtitle: Text(
-                            project.core?.currentFocus ??
-                                project.core?.objective ??
-                                'No coordination summary',
+                            project.atlasContext?.core?.currentFocus ??
+                                project.atlasContext?.core?.objective ??
+                                project.description ??
+                                'Hermes Project',
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,
                           ),
@@ -147,7 +143,7 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
                             crossAxisAlignment: WrapCrossAlignment.center,
                             spacing: 8,
                             children: [
-                              if (_bindingProjectId == project.projectId)
+                              if (_bindingProjectId == project.hermesProjectId)
                                 const SizedBox(
                                   width: 20,
                                   height: 20,
@@ -156,10 +152,13 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
                                     strokeWidth: 2,
                                   ),
                                 ),
-                              if (project.projection != null)
+                              if (project.atlasContext?.projection != null)
                                 Chip(
                                   label: Text(
-                                    project.projection!.continuityStatus,
+                                    project
+                                        .atlasContext!
+                                        .projection!
+                                        .continuityStatus,
                                   ),
                                 ),
                               if (selected)
