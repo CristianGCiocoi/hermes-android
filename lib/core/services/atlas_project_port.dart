@@ -257,7 +257,7 @@ class ProjectCatalogController {
           );
         }
       }
-      joined = native
+      joined = nativeWithActive
           .map(
             (project) => byHermesId[project.hermesProjectId] == null
                 ? project

@@ -264,6 +264,16 @@ void main() {
     );
   });
 
+  test('ATLAS enrichment preserves native active Project state', () async {
+    final native = FakeHermesPort()..activeId = 'p_1234abcd';
+    final project = (await ProjectCatalogController(
+      native,
+      atlas: FakeAtlasPort([context()]),
+    ).list(canonicalProfileId: 'pro')).single;
+    expect(project.isActive, isTrue);
+    expect(project.canonicalProjectId, projectId);
+  });
+
   test('native workspace metadata is strictly bounded and secret-free', () {
     for (final mutation in [
       {'icon': 1},
