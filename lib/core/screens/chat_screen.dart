@@ -1093,11 +1093,75 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       sessionId: widget.session.id,
       name: draft.name,
       dataUrl: dataUrl,
+      clientAttachmentId: draft.id,
+      mediaType: draft.mediaType,
     );
     return AttachmentUploadReceipt(
       refText: attachment.refText,
       atlasIntakeAccepted: attachment.atlasIntakeAccepted,
+      atlasTemporaryReceipt: attachment.atlasTemporaryReceipt,
     );
+  }
+
+  void _offerTemporaryPromotion(
+    DesktopGatewayClient desktopGateway,
+    List<AttachmentDraft> attachments,
+  ) {
+    final temporary = attachments
+        .where((draft) => draft.temporaryContentId != null)
+        .toList(growable: false);
+    if (temporary.isEmpty || !mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          temporary.length == 1
+              ? '${temporary.first.name} is temporary and not a Document.'
+              : '${temporary.length} attachments are temporary and not Documents.',
+        ),
+        duration: const Duration(seconds: 12),
+        action: SnackBarAction(
+          label: 'Promote',
+          onPressed: () => unawaited(
+            _promoteTemporaryAttachments(desktopGateway, temporary),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _promoteTemporaryAttachments(
+    DesktopGatewayClient desktopGateway,
+    List<AttachmentDraft> attachments,
+  ) async {
+    try {
+      for (final draft in attachments) {
+        final temporaryContentId = draft.temporaryContentId;
+        if (temporaryContentId == null || draft.promotionReceipt != null) {
+          continue;
+        }
+        draft.promotionReceipt = await desktopGateway
+            .promoteTemporaryAttachment(
+              sessionId: widget.session.id,
+              temporaryContentId: temporaryContentId,
+              clientAttachmentId: draft.id,
+            );
+      }
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Document promotion completed.'),
+          backgroundColor: Colors.green,
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Document promotion failed: $error'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+    }
   }
 
   Future<void> _retryAttachment(AttachmentDraft draft) async {
@@ -1394,7 +1458,11 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
 
     // A remote-gateway profile uses one transport for every prompt. Images and
     // arbitrary files are both attached with the official `file.attach` RPC.
-    if (_turnApplicationSession != null && !_legacyTransportFallback) {
+    final atlasAttachmentTurn =
+        widget.connection.atlasOwnerEnabled && attachments.isNotEmpty;
+    if (_turnApplicationSession != null &&
+        !_legacyTransportFallback &&
+        !atlasAttachmentTurn) {
       await _sendRecoverableGatewayMessage(
         text: text,
         attachments: attachments,
@@ -1648,6 +1716,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
             _messages.add({'role': 'assistant', 'content': ''});
             turnAdded = true;
           });
+          if (desktopGateway != null) {
+            _offerTemporaryPromotion(desktopGateway, attachments);
+          }
           _scheduleStreamingFollow();
           void onEvent(StreamEvent event) {
             _handleDesktopGatewayEvent(event, responseGeneration);

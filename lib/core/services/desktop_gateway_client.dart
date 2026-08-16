@@ -30,6 +30,7 @@ class DesktopGatewayClient {
   final String _baseUrl;
   final DashboardClient _dashboard;
   final String _documentProfile;
+  final String? _atlasProfile;
   WsClient? _ws;
   final Map<String, String> _gatewaySessionIds = {};
   DesktopAsyncEventCallback? _asyncEventListener;
@@ -54,6 +55,7 @@ class DesktopGatewayClient {
     required this._baseUrl,
     required this._dashboard,
     required this._documentProfile,
+    required this._atlasProfile,
   });
 
   factory DesktopGatewayClient.fromConnection(SavedConnection connection) {
@@ -79,6 +81,12 @@ class DesktopGatewayClient {
       '${baseUri.scheme}://${baseUri.host}:$port',
       pathPrefix,
     );
+    final requestedPrefix = connection.gatewayPrefix?.trim() ?? '';
+    final atlasProfile = connection.atlasOwnerEnabled
+        ? (requestedPrefix.isEmpty
+              ? 'organizator'
+              : requestedPrefix.substring(1))
+        : null;
     return DesktopGatewayClient._(
       connectionId: connection.id,
       baseUrl: baseUrl,
@@ -91,6 +99,7 @@ class DesktopGatewayClient {
         password: connection.dashboardPassword,
       ),
       documentProfile: documentIntakeProfileForConnection(connection),
+      atlasProfile: atlasProfile,
     );
   }
 
@@ -185,14 +194,63 @@ class DesktopGatewayClient {
     required String sessionId,
     required String name,
     required String dataUrl,
+    required String clientAttachmentId,
+    required String mediaType,
+    String? projectId,
   }) async {
     final gateway = await _connect(sessionId);
+    final atlasProfile = _atlasProfile;
+    if (atlasProfile != null) {
+      final ready = await gateway.client.waitForGatewayReady();
+      final capability = AtlasTemporaryAttachmentCapability.fromGatewayReady(
+        ready,
+      );
+      if (!capability.supported) {
+        throw StateError(
+          'This Gateway does not advertise ATLAS Temporary Content.',
+        );
+      }
+    }
     return gateway.client.attachFile(
       sessionId: gateway.sessionId,
       name: name,
       dataUrl: dataUrl,
       sourceChannel: 'hermes_mobile',
       sourceProfile: _documentProfile,
+      atlasConversationId: atlasProfile == null ? null : sessionId,
+      atlasProfileId: atlasProfile,
+      atlasIdempotencyKey: atlasProfile == null
+          ? null
+          : 'attach-$clientAttachmentId',
+      atlasMimeType: atlasProfile == null ? null : mediaType,
+      atlasProjectId: atlasProfile == null ? null : projectId,
+    );
+  }
+
+  Future<Map<String, dynamic>> promoteTemporaryAttachment({
+    required String sessionId,
+    required String temporaryContentId,
+    required String clientAttachmentId,
+  }) async {
+    final profile = _atlasProfile;
+    if (profile == null) {
+      throw StateError('ATLAS Temporary Content is not enabled.');
+    }
+    final gateway = await _connect(sessionId);
+    final capability = AtlasTemporaryAttachmentCapability.fromGatewayReady(
+      await gateway.client.waitForGatewayReady(),
+    );
+    if (!capability.supported) {
+      throw StateError(
+        'This Gateway does not advertise ATLAS Temporary Content.',
+      );
+    }
+    return gateway.client.promoteFile(
+      sessionId: gateway.sessionId,
+      temporaryContentId: temporaryContentId,
+      conversationId: sessionId,
+      profileId: profile,
+      idempotencyKey: 'promote-$clientAttachmentId',
     );
   }
 

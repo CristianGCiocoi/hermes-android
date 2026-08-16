@@ -6,6 +6,7 @@
 // a JSON-RPC response with the same id.
 import 'dart:async';
 import 'dart:convert';
+import 'package:crypto/crypto.dart';
 import 'package:web_socket_channel/io.dart';
 
 Object? _deepFreezeJson(Object? value) {
@@ -132,6 +133,7 @@ class RemoteFileAttachment {
   final bool? atlasIntakeAccepted;
   final String? atlasIntakeStatus;
   final String? atlasRelativePath;
+  final Map<String, dynamic>? atlasTemporaryReceipt;
 
   const RemoteFileAttachment({
     required this.name,
@@ -141,7 +143,210 @@ class RemoteFileAttachment {
     this.atlasIntakeAccepted,
     this.atlasIntakeStatus,
     this.atlasRelativePath,
+    this.atlasTemporaryReceipt,
   });
+
+  String? get temporaryContentId =>
+      atlasTemporaryReceipt?['temporary_content_id'] as String?;
+}
+
+class AtlasTemporaryAttachmentCapability {
+  static const contract = 'atlas.hermes-temporary-attachment.v1';
+  final bool supported;
+  final int maxBytes;
+
+  const AtlasTemporaryAttachmentCapability._(this.supported, this.maxBytes);
+  const AtlasTemporaryAttachmentCapability.unsupported() : this._(false, 0);
+
+  factory AtlasTemporaryAttachmentCapability.fromGatewayReady(
+    Map<String, dynamic> frame,
+  ) {
+    final params = frame['params'];
+    final payload = params is Map<String, dynamic> ? params['payload'] : null;
+    final capabilities = payload is Map<String, dynamic>
+        ? payload['capabilities']
+        : null;
+    final raw = capabilities is Map<String, dynamic>
+        ? capabilities['atlas_temporary_attachment']
+        : null;
+    if (raw is! Map<String, dynamic> ||
+        raw.length != 5 ||
+        raw['contract'] != contract ||
+        raw['version'] != 1 ||
+        raw['attach_method'] != 'file.attach' ||
+        raw['promote_method'] != 'file.promote' ||
+        raw['max_bytes'] is! int ||
+        (raw['max_bytes'] as int) < 1 ||
+        (raw['max_bytes'] as int) > 64 * 1024 * 1024) {
+      return const AtlasTemporaryAttachmentCapability.unsupported();
+    }
+    return AtlasTemporaryAttachmentCapability._(true, raw['max_bytes'] as int);
+  }
+}
+
+final _atlasUuid = RegExp(
+  r'^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$',
+);
+
+bool _exactWireKeys(Map<String, dynamic> value, Set<String> keys) =>
+    value.length == keys.length && keys.containsAll(value.keys);
+
+bool _validTemporaryReceipt(
+  Object? value, {
+  required String profileId,
+  required String conversationId,
+  required String? projectId,
+  required String mimeType,
+  required String dataUrl,
+  required String expectedName,
+  required String idempotencyKey,
+}) {
+  if (value is! Map<String, dynamic>) return false;
+  final baseKeys = <String>{
+    'authority',
+    'storage_authority',
+    'document_id',
+    'temporary_content_id',
+    'content_kind',
+    'mime_type',
+    'size_bytes',
+    'content_hash',
+    'storage_reference',
+    'origin_type',
+    'origin_profile_id',
+    'origin_session_id',
+    'origin_project_id',
+    'origin_channel',
+    'origin_producer_ref',
+    'parent_temporary_content_id',
+    'created_at',
+    'updated_at',
+    'expires_at',
+    'retention_class',
+    'lifecycle_status',
+    'processing_status',
+    'promotion_status',
+    'storage_status',
+    'retention_status',
+    'revision',
+    'provenance',
+    'failure_metadata',
+  };
+  final keys = <String>{
+    ...baseKeys,
+    if (value.containsKey('idempotent_replay')) 'idempotent_replay',
+  };
+  final comma = dataUrl.indexOf(',');
+  if (comma < 0 || !dataUrl.substring(0, comma).endsWith(';base64')) {
+    return false;
+  }
+  late final List<int> bytes;
+  try {
+    bytes = base64Decode(dataUrl.substring(comma + 1));
+  } catch (_) {
+    return false;
+  }
+  final tempId = value['temporary_content_id'];
+  final contentHash = 'sha256:${sha256.convert(bytes)}';
+  final provenance = value['provenance'];
+  final created = DateTime.tryParse(value['created_at']?.toString() ?? '');
+  final updated = DateTime.tryParse(value['updated_at']?.toString() ?? '');
+  final expires = DateTime.tryParse(value['expires_at']?.toString() ?? '');
+  return _exactWireKeys(value, keys) &&
+      value['authority'] == 'temporary-content-core' &&
+      value['storage_authority'] == 'workspace-storage' &&
+      value['document_id'] == null &&
+      tempId is String &&
+      _atlasUuid.hasMatch(tempId) &&
+      value['content_kind'] == 'ATTACHMENT' &&
+      value['mime_type'] == mimeType &&
+      value['size_bytes'] == bytes.length &&
+      value['content_hash'] == contentHash &&
+      value['storage_reference'] ==
+          'workspace://0x_Temp/$profileId/$tempId/$expectedName' &&
+      value['origin_type'] == 'UPLOAD' &&
+      value['origin_profile_id'] == profileId &&
+      value['origin_session_id'] == conversationId &&
+      value['origin_project_id'] == projectId &&
+      value['origin_channel'] == 'hermes-mobile' &&
+      value['origin_producer_ref'] == 'hermes-mobile://owner-provider/upload' &&
+      value['parent_temporary_content_id'] == null &&
+      created != null &&
+      updated != null &&
+      expires != null &&
+      !updated.isBefore(created) &&
+      expires.isAfter(updated) &&
+      value['retention_class'] == 'SHORT' &&
+      value['lifecycle_status'] == 'AVAILABLE' &&
+      value['processing_status'] == 'NOT_REQUESTED' &&
+      value['promotion_status'] == 'NOT_REQUESTED' &&
+      value['storage_status'] == 'AVAILABLE' &&
+      value['retention_status'] == 'ACTIVE' &&
+      value['revision'] is int &&
+      (value['revision'] as int) > 0 &&
+      provenance is Map<String, dynamic> &&
+      _exactWireKeys(provenance, {
+        'actor_profile_id',
+        'conversation_ref',
+        'correlation_id',
+        'evidence_ref',
+      }) &&
+      provenance['actor_profile_id'] == profileId &&
+      provenance['conversation_ref'] == 'hermes://session/$conversationId' &&
+      provenance['correlation_id'] == idempotencyKey &&
+      provenance['evidence_ref'] ==
+          'storage-receipt://workspace-storage/$tempId/$contentHash' &&
+      value['failure_metadata'] == null &&
+      (!value.containsKey('idempotent_replay') ||
+          value['idempotent_replay'] == true);
+}
+
+bool _validPromotionReceipt(
+  Object? value, {
+  required String temporaryContentId,
+  required String idempotencyKey,
+}) {
+  if (value is! Map<String, dynamic>) return false;
+  final baseKeys = <String>{
+    'authority',
+    'durable_authority',
+    'promotion_status',
+    'receipt_id',
+    'attempt_id',
+    'temporary_content_id',
+    'document_id',
+    'document_version_id',
+    'idempotency_key',
+    'request_digest',
+    'promoted_at',
+    'document_service_receipt_ref',
+  };
+  final keys = <String>{
+    ...baseKeys,
+    if (value.containsKey('idempotent_replay')) 'idempotent_replay',
+  };
+  final ids = <Object?>[
+    value['receipt_id'],
+    value['attempt_id'],
+    temporaryContentId,
+    value['document_id'],
+    value['document_version_id'],
+  ];
+  return _exactWireKeys(value, keys) &&
+      value['authority'] == 'temporary-content-core' &&
+      value['durable_authority'] == 'document-service' &&
+      value['promotion_status'] == 'PROMOTED' &&
+      value['temporary_content_id'] == temporaryContentId &&
+      ids.every((id) => id is String && _atlasUuid.hasMatch(id)) &&
+      ids.toSet().length == ids.length &&
+      value['idempotency_key'] == idempotencyKey &&
+      value['request_digest'] is String &&
+      RegExp(r'^sha256:[0-9a-f]{64}$').hasMatch(value['request_digest']) &&
+      DateTime.tryParse(value['promoted_at']?.toString() ?? '') != null &&
+      value['document_service_receipt_ref'] ==
+          'document-service://promotion/${value['document_id']}/${value['document_version_id']}' &&
+      (!value.containsKey('idempotent_replay') ||
+          value['idempotent_replay'] == true);
 }
 
 typedef StreamCallback = void Function(StreamEvent event);
@@ -914,6 +1119,11 @@ class WsClient {
     String path = '',
     String? sourceChannel,
     String? sourceProfile,
+    String? atlasConversationId,
+    String? atlasProfileId,
+    String? atlasIdempotencyKey,
+    String? atlasMimeType,
+    String? atlasProjectId,
   }) async {
     final params = <String, dynamic>{
       'session_id': sessionId,
@@ -926,6 +1136,22 @@ class WsClient {
     }
     if (sourceProfile?.isNotEmpty == true) {
       params['source_profile'] = sourceProfile;
+    }
+    final atlasRequested = atlasProfileId != null;
+    if (atlasRequested) {
+      if (atlasConversationId == null ||
+          atlasIdempotencyKey == null ||
+          atlasMimeType == null) {
+        throw ArgumentError('ATLAS attachment metadata is incomplete');
+      }
+      params['atlas_temporary'] = <String, dynamic>{
+        'contract': AtlasTemporaryAttachmentCapability.contract,
+        'profile_id': atlasProfileId,
+        'conversation_id': atlasConversationId,
+        'idempotency_key': atlasIdempotencyKey,
+        'project_id': atlasProjectId,
+        'mime_type': atlasMimeType,
+      };
     }
     final response = await send('file.attach', params);
     final error = response['error'];
@@ -945,6 +1171,23 @@ class WsClient {
       throw JsonRpcError('file.attach', 'Gateway returned no file reference');
     }
     final atlasIntake = result['atlas_intake'];
+    final atlasTemporary = result['atlas_temporary'];
+    if (atlasRequested &&
+        !_validTemporaryReceipt(
+          atlasTemporary,
+          profileId: atlasProfileId,
+          conversationId: atlasConversationId!,
+          projectId: atlasProjectId,
+          mimeType: atlasMimeType!,
+          dataUrl: dataUrl,
+          expectedName: result['name']?.toString() ?? name,
+          idempotencyKey: atlasIdempotencyKey!,
+        )) {
+      throw JsonRpcError(
+        'file.attach',
+        'Gateway returned an invalid Temporary Content receipt',
+      );
+    }
     return RemoteFileAttachment(
       name: result['name']?.toString() ?? name,
       path: result['path']?.toString() ?? path,
@@ -959,7 +1202,56 @@ class WsClient {
       atlasRelativePath: atlasIntake is Map<String, dynamic>
           ? atlasIntake['relative_path']?.toString()
           : null,
+      atlasTemporaryReceipt: atlasTemporary is Map<String, dynamic>
+          ? _deepFreezeJsonMap(atlasTemporary)
+          : null,
     );
+  }
+
+  Future<Map<String, dynamic>> promoteFile({
+    required String sessionId,
+    required String temporaryContentId,
+    required String conversationId,
+    required String profileId,
+    required String idempotencyKey,
+  }) async {
+    final response = await send('file.promote', {
+      'session_id': sessionId,
+      'temporary_content_id': temporaryContentId,
+      'atlas_temporary': <String, dynamic>{
+        'contract': AtlasTemporaryAttachmentCapability.contract,
+        'profile_id': profileId,
+        'conversation_id': conversationId,
+        'idempotency_key': idempotencyKey,
+        'project_id': null,
+        'mime_type': 'application/octet-stream',
+      },
+    });
+    final error = response['error'];
+    if (error != null) {
+      throw _gatewayResponseError(
+        'file.promote',
+        error,
+        fallbackMessage: 'Promotion failed',
+      );
+    }
+    final result = response['result'];
+    final receipt = result is Map<String, dynamic>
+        ? result['atlas_promotion']
+        : null;
+    if (result is! Map<String, dynamic> ||
+        result['promoted'] != true ||
+        !_validPromotionReceipt(
+          receipt,
+          temporaryContentId: temporaryContentId,
+          idempotencyKey: idempotencyKey,
+        )) {
+      throw JsonRpcError(
+        'file.promote',
+        'Gateway returned an invalid promotion receipt',
+      );
+    }
+    return _deepFreezeJsonMap(receipt as Map<String, dynamic>);
   }
 
   /// Create a new chat session.

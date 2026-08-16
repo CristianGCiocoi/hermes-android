@@ -38,10 +38,12 @@ typedef AttachmentPromptSubmit = Future<void> Function(List<String> refTexts);
 class AttachmentUploadReceipt {
   final String refText;
   final bool? atlasIntakeAccepted;
+  final Map<String, dynamic>? atlasTemporaryReceipt;
 
   const AttachmentUploadReceipt({
     required this.refText,
     this.atlasIntakeAccepted,
+    this.atlasTemporaryReceipt,
   });
 }
 
@@ -361,6 +363,7 @@ class AttachmentDraftService {
           AttachmentUploadReceipt(
             refText: draft.refText!,
             atlasIntakeAccepted: draft.atlasIntakeAccepted,
+            atlasTemporaryReceipt: draft.temporaryContentReceipt,
           ),
         );
         continue;
@@ -403,7 +406,10 @@ class AttachmentDraftService {
       draft
         ..status = AttachmentDraftStatus.attached
         ..refText = receipt.refText
-        ..atlasIntakeAccepted = receipt.atlasIntakeAccepted;
+        ..atlasIntakeAccepted = receipt.atlasIntakeAccepted
+        ..temporaryContentReceipt = receipt.atlasTemporaryReceipt
+        ..temporaryContentId =
+            receipt.atlasTemporaryReceipt?['temporary_content_id'] as String?;
       dataUrl = null;
       await removeCachedFile(draft);
       onChanged?.call(draft);
