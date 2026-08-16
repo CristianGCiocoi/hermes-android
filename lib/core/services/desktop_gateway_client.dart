@@ -153,7 +153,10 @@ class DesktopGatewayClient {
     String mobileSessionId,
   ) async {
     try {
-      return await client.resumeSession(mobileSessionId);
+      return await client.resumeSession(
+        mobileSessionId,
+        profile: _atlasProfile,
+      );
     } on JsonRpcError catch (error) {
       if (error.code != 4007 &&
           !error.message.toLowerCase().contains('session not found')) {
@@ -162,7 +165,10 @@ class DesktopGatewayClient {
       // New mobile chats do not exist in Hermes yet. Create them with the
       // mobile-generated ID so REST history and the Desktop runtime share one
       // stable identity. Existing sessions always take the resume path.
-      return client.createOrResumeSession(mobileSessionId);
+      return client.createOrResumeSession(
+        mobileSessionId,
+        profile: _atlasProfile,
+      );
     }
   }
 

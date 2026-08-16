@@ -1946,10 +1946,55 @@ void main() {
 
       try {
         await client.connect();
-        expect(await client.resumeSession('stored-123'), 'runtime-123');
+        expect(
+          await client.resumeSession('stored-123', profile: 'personal'),
+          'runtime-123',
+        );
         final request = await requestSeen.future;
         expect(request['method'], 'session.resume');
-        expect(request['params'], {'session_id': 'stored-123'});
+        expect(request['params'], {
+          'session_id': 'stored-123',
+          'profile': 'personal',
+        });
+      } finally {
+        client.close();
+        await socketSubscription.cancel();
+        await server.close(force: true);
+      }
+    });
+
+    test('session.create carries the selected native Hermes profile', () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      final requestSeen = Completer<Map<String, dynamic>>();
+      final socketSubscription = server
+          .transform(WebSocketTransformer())
+          .listen((socket) {
+            socket.listen((raw) {
+              final request = jsonDecode(raw as String) as Map<String, dynamic>;
+              requestSeen.complete(request);
+              socket.add(
+                jsonEncode({
+                  'jsonrpc': '2.0',
+                  'id': request['id'],
+                  'result': {'session_id': 'runtime-created'},
+                }),
+              );
+            });
+          });
+      final client = WsClient('http://127.0.0.1:${server.port}');
+
+      try {
+        await client.connect();
+        expect(
+          await client.createOrResumeSession('mobile-created', profile: 'pro'),
+          'runtime-created',
+        );
+        final request = await requestSeen.future;
+        expect(request['method'], 'session.create');
+        expect(request['params'], {
+          'session_id': 'mobile-created',
+          'profile': 'pro',
+        });
       } finally {
         client.close();
         await socketSubscription.cancel();

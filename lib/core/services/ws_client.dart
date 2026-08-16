@@ -1004,8 +1004,11 @@ class WsClient {
   }
 
   /// Resume an existing session.
-  Future<String> resumeSession(String sessionId) async {
-    final result = await send('session.resume', {'session_id': sessionId});
+  Future<String> resumeSession(String sessionId, {String? profile}) async {
+    final result = await send('session.resume', {
+      'session_id': sessionId,
+      'profile': ?profile,
+    });
     if (result['error'] != null) {
       throw _gatewayResponseError(
         'session.resume',
@@ -1272,8 +1275,14 @@ class WsClient {
   /// Resume an existing session via session.create (which starts a new
   /// agent process for the given session ID). This works for sessions
   /// that exist in the REST API but aren't active in the gateway.
-  Future<String> createOrResumeSession(String sessionId) async {
-    final result = await send('session.create', {'session_id': sessionId});
+  Future<String> createOrResumeSession(
+    String sessionId, {
+    String? profile,
+  }) async {
+    final result = await send('session.create', {
+      'session_id': sessionId,
+      'profile': ?profile,
+    });
     if (result['error'] != null) {
       throw _gatewayResponseError(
         'session.create',
