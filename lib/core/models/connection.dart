@@ -19,6 +19,7 @@ class SavedConnection {
   final String apiKey;
   final bool useHttps;
   final String? gatewayPrefix;
+  final bool atlasOwnerEnabled;
   final String? dashboardPrefix;
   final bool dashboardProxied;
 
@@ -47,6 +48,7 @@ class SavedConnection {
     required this.apiKey,
     this.useHttps = false,
     this.gatewayPrefix,
+    this.atlasOwnerEnabled = false,
     this.dashboardPrefix,
     this.dashboardProxied = false,
     this.desktopGatewayUrl,
@@ -143,6 +145,9 @@ class SavedConnection {
     if (gatewayPrefix != null && gatewayPrefix!.isNotEmpty) {
       m['gateway_prefix'] = gatewayPrefix;
     }
+    if (atlasOwnerEnabled) {
+      m['atlas_owner_enabled'] = true;
+    }
     if (dashboardPrefix != null && dashboardPrefix!.isNotEmpty) {
       m['dashboard_prefix'] = dashboardPrefix;
     }
@@ -174,6 +179,7 @@ class SavedConnection {
       apiKey: (map['api_key'] as String?) ?? '',
       useHttps: (map['use_https'] as bool?) ?? false,
       gatewayPrefix: map['gateway_prefix'] as String?,
+      atlasOwnerEnabled: (map['atlas_owner_enabled'] as bool?) ?? false,
       dashboardPrefix: map['dashboard_prefix'] as String?,
       dashboardProxied: (map['dashboard_proxied'] as bool?) ?? false,
       desktopGatewayUrl: nonEmpty(map['desktop_gateway_url']),
@@ -193,6 +199,7 @@ class SavedConnection {
     String? apiKey,
     bool? useHttps,
     String? gatewayPrefix,
+    bool? atlasOwnerEnabled,
     String? dashboardPrefix,
     bool? dashboardProxied,
     String? desktopGatewayUrl,
@@ -216,6 +223,7 @@ class SavedConnection {
       gatewayPrefix: clearGatewayPrefix
           ? null
           : (gatewayPrefix ?? this.gatewayPrefix),
+      atlasOwnerEnabled: atlasOwnerEnabled ?? this.atlasOwnerEnabled,
       dashboardPrefix: clearDashboardPrefix
           ? null
           : (dashboardPrefix ?? this.dashboardPrefix),

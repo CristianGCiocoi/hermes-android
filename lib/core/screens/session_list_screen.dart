@@ -6,6 +6,7 @@ import '../services/desktop_gateway_client.dart';
 import '../services/gateway_turn_application_controller.dart';
 import '../services/ws_client.dart';
 import '../services/atlas_project_port.dart';
+import '../services/atlas_owner_client.dart';
 import '../models/mobile_session_continuity.dart';
 import '../services/session_continuity_port.dart';
 import 'chat_screen.dart';
@@ -81,7 +82,10 @@ class _SessionListScreenState extends State<SessionListScreen> {
   late final ApiClient _client;
   late final bool _ownsClient;
   DesktopGatewayClient? _desktopGateway;
+  AtlasOwnerClient? _atlasOwnerClient;
   late final ProjectCatalogController? _projectCatalogController;
+  late final SessionContinuityController? _sessionContinuityController;
+  String? _canonicalOwnerProfileId;
   final _searchController = TextEditingController();
   List<SavedConnection> _profiles = const [];
   List<Session> _sessions = [];
@@ -112,13 +116,29 @@ class _SessionListScreenState extends State<SessionListScreen> {
         _desktopGateway = null;
       }
     }
+    final requestedOwnerProfile = atlasOwnerProfileRequest(widget.connection);
+    if (widget.connection.atlasOwnerEnabled && requestedOwnerProfile != null) {
+      try {
+        _atlasOwnerClient = AtlasOwnerClient.fromConnection(widget.connection);
+        _canonicalOwnerProfileId = requestedOwnerProfile;
+      } on FormatException {
+        _atlasOwnerClient = null;
+        _canonicalOwnerProfileId = null;
+      }
+    }
     _projectCatalogController =
         widget.projectCatalogController ??
         (_desktopGateway == null
             ? null
             : ProjectCatalogController(
                 HermesDesktopProjectsPort(_desktopGateway!),
+                atlas: _atlasOwnerClient,
               ));
+    _sessionContinuityController =
+        widget.sessionContinuityController ??
+        (_atlasOwnerClient == null
+            ? null
+            : SessionContinuityController(_atlasOwnerClient!));
     _loadProfiles();
     _checkHealth();
   }
@@ -190,6 +210,7 @@ class _SessionListScreenState extends State<SessionListScreen> {
   @override
   void dispose() {
     _searchController.dispose();
+    _atlasOwnerClient?.close();
     _desktopGateway?.close();
     if (_ownsClient) _client.close();
     super.dispose();
@@ -297,7 +318,8 @@ class _SessionListScreenState extends State<SessionListScreen> {
 
   Future<void> _chooseProjectForSession(Session session) async {
     final controller = _projectCatalogController;
-    final profileId = widget.canonicalProjectProfileId;
+    final profileId =
+        widget.canonicalProjectProfileId ?? _canonicalOwnerProfileId;
     if (controller == null ||
         controller.atlasEnrichmentEnabled && profileId == null ||
         !mounted) {
@@ -348,8 +370,9 @@ class _SessionListScreenState extends State<SessionListScreen> {
   }
 
   Future<void> _openInitialSharedSession() async {
-    final controller = widget.sessionContinuityController;
-    final profileId = widget.canonicalSessionProfileId;
+    final controller = _sessionContinuityController;
+    final profileId =
+        widget.canonicalSessionProfileId ?? _canonicalOwnerProfileId;
     final request = widget.initialSessionOpenRequest;
     if (_continuityOpenAttempted ||
         controller == null ||

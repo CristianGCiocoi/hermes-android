@@ -283,6 +283,7 @@ class _HomeScreenState extends State<HomeScreen> {
               port,
               apiKey, {
               gatewayPrefix,
+              atlasOwnerEnabled = false,
               dashboardPrefix,
               dashboardProxied = false,
               desktopGatewayUrl,
@@ -297,6 +298,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   port,
                   apiKey,
                   gatewayPrefix: gatewayPrefix,
+                  atlasOwnerEnabled: atlasOwnerEnabled,
                   dashboardPrefix: dashboardPrefix,
                   dashboardProxied: dashboardProxied,
                   desktopGatewayUrl: desktopGatewayUrl,
@@ -312,6 +314,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   port,
                   apiKey,
                   gatewayPrefix: gatewayPrefix,
+                  atlasOwnerEnabled: atlasOwnerEnabled,
                   dashboardPrefix: dashboardPrefix,
                   dashboardProxied: dashboardProxied,
                   desktopGatewayUrl: desktopGatewayUrl,
@@ -823,6 +826,7 @@ class _AddDialog extends StatefulWidget {
     int port,
     String apiKey, {
     String? gatewayPrefix,
+    bool atlasOwnerEnabled,
     String? dashboardPrefix,
     bool dashboardProxied,
     String? desktopGatewayUrl,
@@ -850,6 +854,7 @@ class _AddDialogState extends State<_AddDialog> {
   late final TextEditingController _desktopGatewayUrl;
   late bool _showDashboard;
   late bool _dashboardProxied;
+  late bool _atlasOwnerEnabled;
   bool _validating = false;
   String? _error;
 
@@ -880,6 +885,7 @@ class _AddDialogState extends State<_AddDialog> {
       text: conn?.desktopGatewayUrl ?? 'http://192.168.1.193/desktop',
     );
     _dashboardProxied = conn?.dashboardProxied ?? false;
+    _atlasOwnerEnabled = conn?.atlasOwnerEnabled ?? false;
     _showDashboard =
         conn?.gatewayPrefix?.isNotEmpty == true ||
         conn?.dashboardPrefix?.isNotEmpty == true ||
@@ -899,6 +905,16 @@ class _AddDialogState extends State<_AddDialog> {
     final dashboardPrefix = _dashboardPrefix.text.trim();
 
     if (label.isEmpty || host.isEmpty || port <= 0) return;
+    if (_atlasOwnerEnabled &&
+        !RegExp(
+          r'^/(?:profile/)?[a-z][a-z0-9_-]{1,63}$',
+        ).hasMatch(gatewayPrefix)) {
+      setState(() {
+        _error =
+            'ATLAS owner enrichment requires one exact Profile path prefix.';
+      });
+      return;
+    }
 
     setState(() {
       _validating = true;
@@ -990,6 +1006,7 @@ class _AddDialogState extends State<_AddDialog> {
         port,
         apiKey,
         gatewayPrefix: gatewayPrefix.isEmpty ? null : gatewayPrefix,
+        atlasOwnerEnabled: _atlasOwnerEnabled,
         dashboardPrefix: dashboardPrefix.isEmpty ? null : dashboardPrefix,
         dashboardProxied: _dashboardProxied,
         desktopGatewayUrl: desktopGatewayUrl.isEmpty ? null : desktopGatewayUrl,
@@ -1117,6 +1134,18 @@ class _AddDialogState extends State<_AddDialog> {
                       'e.g. /profile/peter (proxy path before /api/ and /v1/)',
                 ),
                 autocorrect: false,
+              ),
+              SwitchListTile(
+                value: _atlasOwnerEnabled,
+                contentPadding: EdgeInsets.zero,
+                title: const Text('ATLAS owner enrichment'),
+                subtitle: const Text(
+                  'Optional. Generic Hermes remains the default; the server '
+                  'still authenticates and owns Profile and Project state.',
+                ),
+                onChanged: _validating
+                    ? null
+                    : (value) => setState(() => _atlasOwnerEnabled = value),
               ),
               const SizedBox(height: 12),
               TextField(

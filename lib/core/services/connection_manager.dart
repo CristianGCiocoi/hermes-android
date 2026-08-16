@@ -13,6 +13,10 @@ import '../models/session.dart';
 export '../models/connection.dart';
 export '../models/session.dart';
 
+bool _validAtlasOwnerPrefix(String? value) =>
+    value != null &&
+    RegExp(r'^/(?:profile/)?[a-z][a-z0-9_-]{1,63}$').hasMatch(value);
+
 /// Injectable secret storage boundary used by [ConnectionManager].
 ///
 /// The production implementation is backed by Android Keystore through
@@ -201,6 +205,7 @@ class ConnectionManager {
     int port,
     String apiKey, {
     String? gatewayPrefix,
+    bool atlasOwnerEnabled = false,
     String? dashboardPrefix,
     bool dashboardProxied = false,
     String? desktopGatewayUrl,
@@ -208,6 +213,10 @@ class ConnectionManager {
     String? dashboardUsername,
     String? dashboardPassword,
   }) async {
+    final gateway = gatewayPrefix?.trim();
+    if (atlasOwnerEnabled && !_validAtlasOwnerPrefix(gateway)) {
+      throw ArgumentError('ATLAS owner mode requires one exact Profile prefix');
+    }
     final normalized = SavedConnection.normalizeHostAndPort(host, port);
     final conn = SavedConnection(
       id: _uuid.v4(),
@@ -216,7 +225,8 @@ class ConnectionManager {
       port: normalized.port,
       apiKey: apiKey,
       useHttps: normalized.useHttps,
-      gatewayPrefix: gatewayPrefix,
+      gatewayPrefix: gateway,
+      atlasOwnerEnabled: atlasOwnerEnabled,
       dashboardPrefix: dashboardPrefix,
       dashboardProxied: dashboardProxied,
       desktopGatewayUrl: desktopGatewayUrl?.trim(),
@@ -246,6 +256,7 @@ class ConnectionManager {
     int port,
     String apiKey, {
     String? gatewayPrefix,
+    bool atlasOwnerEnabled = false,
     String? dashboardPrefix,
     bool dashboardProxied = false,
     String? desktopGatewayUrl,
@@ -263,6 +274,9 @@ class ConnectionManager {
 
     final normalized = SavedConnection.normalizeHostAndPort(host, port);
     final gateway = gatewayPrefix?.trim();
+    if (atlasOwnerEnabled && !_validAtlasOwnerPrefix(gateway)) {
+      throw ArgumentError('ATLAS owner mode requires one exact Profile prefix');
+    }
     final dashboard = dashboardPrefix?.trim();
     final dashUser = dashboardUsername?.trim();
     final dashPass = dashboardPassword?.trim();
@@ -275,6 +289,7 @@ class ConnectionManager {
       apiKey: apiKey,
       useHttps: normalized.useHttps,
       gatewayPrefix: gateway == null || gateway.isEmpty ? null : gateway,
+      atlasOwnerEnabled: atlasOwnerEnabled,
       clearGatewayPrefix: gateway != null && gateway.isEmpty,
       dashboardPrefix: dashboard == null || dashboard.isEmpty
           ? null

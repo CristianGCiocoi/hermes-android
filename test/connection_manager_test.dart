@@ -818,6 +818,40 @@ void main() {
       expect(conn.dashboardPassword, 'secret');
     });
 
+    test(
+      'ATLAS owner mode requires one exact Profile gateway prefix',
+      () async {
+        final prefs = await SharedPreferences.getInstance();
+        final mgr = await ConnectionManager.create(
+          prefs,
+          credentialStore: _MemoryCredentialStore(),
+        );
+
+        await expectLater(
+          mgr.saveConnection(
+            'Invalid',
+            'hermes.example.test',
+            443,
+            'key',
+            gatewayPrefix: '/profile/personal/extra',
+            atlasOwnerEnabled: true,
+          ),
+          throwsArgumentError,
+        );
+        expect(mgr.getConnections(), isEmpty);
+
+        await mgr.saveConnection(
+          'ATLAS',
+          'hermes.example.test',
+          443,
+          'key',
+          gatewayPrefix: '/profile/personal',
+          atlasOwnerEnabled: true,
+        );
+        expect(mgr.getConnections().single.atlasOwnerEnabled, isTrue);
+      },
+    );
+
     test('updateDashboardAuth sets then clears fields', () async {
       final prefs = await SharedPreferences.getInstance();
       final mgr = await ConnectionManager.create(
@@ -1039,6 +1073,24 @@ void main() {
       expect(map['gateway_prefix'], '/profile/peter');
       expect(map['dashboard_prefix'], '/dashboard');
       expect(map['dashboard_proxied'], true);
+    });
+
+    test('ATLAS owner mode is explicit and defaults to generic Hermes', () {
+      final generic = SavedConnection(
+        id: '1',
+        label: 'Hermes',
+        host: 'hermes.example.com',
+        port: 443,
+        apiKey: 'key',
+        useHttps: true,
+        gatewayPrefix: '/profile/personal',
+      );
+      expect(generic.atlasOwnerEnabled, isFalse);
+      expect(generic.toMap().containsKey('atlas_owner_enabled'), isFalse);
+
+      final atlas = generic.copyWith(atlasOwnerEnabled: true);
+      expect(atlas.toMap()['atlas_owner_enabled'], isTrue);
+      expect(SavedConnection.fromMap(atlas.toMap()).atlasOwnerEnabled, isTrue);
     });
 
     test('SavedConnection preserves an optional Desktop gateway URL', () {
