@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
@@ -91,7 +92,6 @@ class AtlasOwnerClient
   static final RegExp _mimeType = RegExp(
     r'^[a-z0-9][a-z0-9!#$&^_.+-]{0,126}/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,126}$',
   );
-  static final RegExp _digest = RegExp(r'^sha256:[0-9a-f]{64}$');
   static final RegExp _reference = RegExp(
     r'^[a-z][a-z0-9+.-]*://[A-Za-z0-9][A-Za-z0-9._:/-]{0,1023}$',
   );
@@ -260,6 +260,7 @@ class AtlasOwnerClient
     final expectedStorage = temporaryContentId is String
         ? 'workspace://0x_Temp/$canonicalProfileId/$temporaryContentId/$filename'
         : null;
+    final expectedContentHash = 'sha256:${sha256.convert(bytes)}';
     if (!_exactKeys(raw, uploadKeys) ||
         raw['authority'] != 'temporary-content-core' ||
         raw['storage_authority'] != 'workspace-storage' ||
@@ -275,8 +276,7 @@ class AtlasOwnerClient
         raw['parent_temporary_content_id'] != null ||
         raw['mime_type'] != mimeType ||
         raw['size_bytes'] != bytes.length ||
-        raw['content_hash'] is! String ||
-        !_digest.hasMatch(raw['content_hash'] as String) ||
+        raw['content_hash'] != expectedContentHash ||
         raw['storage_reference'] != expectedStorage ||
         createdAt == null ||
         updatedAt == null ||
@@ -356,6 +356,11 @@ class AtlasOwnerClient
     };
     final receiptId = raw['receipt_id'];
     final attemptId = raw['attempt_id'];
+    final expectedRequestDigest =
+        'sha256:${sha256.convert(utf8.encode(jsonEncode({'authorization_digest': authorizationDigest, 'authorization_ref': authorizationRef, 'idempotency_key': idempotencyKey, 'temporary_content_id': temporaryContentId})))}';
+    final expectedDocumentReceipt = documentId is String && versionId is String
+        ? 'document-service://promotion/$documentId/$versionId'
+        : null;
     if (!_exactKeys(raw, promotionKeys) ||
         raw['authority'] != 'temporary-content-core' ||
         raw['durable_authority'] != 'document-service' ||
@@ -374,10 +379,9 @@ class AtlasOwnerClient
             }.length !=
             5 ||
         raw['idempotency_key'] != idempotencyKey ||
-        raw['request_digest'] is! String ||
-        !_digest.hasMatch(raw['request_digest'] as String) ||
+        raw['request_digest'] != expectedRequestDigest ||
         _timestamp(raw['promoted_at']) == null ||
-        !_safeReference(raw['document_service_receipt_ref']) ||
+        raw['document_service_receipt_ref'] != expectedDocumentReceipt ||
         (raw.containsKey('idempotent_replay') &&
             raw['idempotent_replay'] is! bool)) {
       throw const FormatException(

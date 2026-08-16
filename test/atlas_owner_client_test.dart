@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:crypto/crypto.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -31,7 +32,8 @@ Map<String, dynamic> temporaryUploadReceipt({
     'content_kind': 'ATTACHMENT',
     'mime_type': 'text/plain',
     'size_bytes': 17,
-    'content_hash': 'sha256:${List.filled(64, 'a').join()}',
+    'content_hash':
+        'sha256:${sha256.convert(utf8.encode('temporary fixture'))}',
     'storage_reference': 'workspace://0x_Temp/personal/$temporary/note.txt',
     'origin_type': 'UPLOAD',
     'origin_profile_id': 'personal',
@@ -63,6 +65,17 @@ Map<String, dynamic> temporaryUploadReceipt({
 }
 
 Map<String, dynamic> temporaryPromotionReceipt({bool idempotentReplay = true}) {
+  final authorizationDigest = 'sha256:${List.filled(64, 'a').join()}';
+  final requestDigest = sha256.convert(
+    utf8.encode(
+      jsonEncode({
+        'authorization_digest': authorizationDigest,
+        'authorization_ref': 'approval://temporary-content/mobile/test-1',
+        'idempotency_key': 'mobile-promote:test-1',
+        'temporary_content_id': '51111111-1111-4111-8111-111111111111',
+      }),
+    ),
+  );
   final receipt = <String, dynamic>{
     'authority': 'temporary-content-core',
     'durable_authority': 'document-service',
@@ -73,7 +86,7 @@ Map<String, dynamic> temporaryPromotionReceipt({bool idempotentReplay = true}) {
     'document_id': '61111111-1111-4111-8111-111111111111',
     'document_version_id': '71111111-1111-4111-8111-111111111111',
     'idempotency_key': 'mobile-promote:test-1',
-    'request_digest': 'sha256:${List.filled(64, 'b').join()}',
+    'request_digest': 'sha256:$requestDigest',
     'promoted_at': '2026-08-16T10:01:00Z',
     'document_service_receipt_ref':
         'document-service://promotion/61111111-1111-4111-8111-111111111111/71111111-1111-4111-8111-111111111111',
@@ -318,6 +331,64 @@ void main() {
       );
     },
   );
+
+  test('Temporary receipts bind exact bytes, request, and durable URI', () async {
+    Future<void> expectUploadRejected(Map<String, dynamic> receipt) async {
+      final client = AtlasOwnerClient.fromConnection(
+        connection(),
+        httpClient: MockClient(
+          (_) async => http.Response(jsonEncode(receipt), 200),
+        ),
+      );
+      addTearDown(client.close);
+      await expectLater(
+        client.uploadTemporaryContent(
+          canonicalProfileId: 'personal',
+          conversationId: 'conversation-1',
+          filename: 'note.txt',
+          mimeType: 'text/plain',
+          bytes: utf8.encode('temporary fixture'),
+          idempotencyKey: 'mobile-temp:test-1',
+        ),
+        throwsFormatException,
+      );
+    }
+
+    Future<void> expectPromotionRejected(Map<String, dynamic> receipt) async {
+      final client = AtlasOwnerClient.fromConnection(
+        connection(),
+        httpClient: MockClient(
+          (_) async => http.Response(jsonEncode(receipt), 200),
+        ),
+      );
+      addTearDown(client.close);
+      await expectLater(
+        client.promoteTemporaryContent(
+          canonicalProfileId: 'personal',
+          conversationId: 'conversation-1',
+          temporaryContentId: '51111111-1111-4111-8111-111111111111',
+          idempotencyKey: 'mobile-promote:test-1',
+          authorizationRef: 'approval://temporary-content/mobile/test-1',
+          authorizationDigest: 'sha256:${List.filled(64, 'a').join()}',
+        ),
+        throwsFormatException,
+      );
+    }
+
+    await expectUploadRejected(
+      temporaryUploadReceipt()
+        ..['content_hash'] = 'sha256:${List.filled(64, 'c').join()}',
+    );
+    await expectPromotionRejected(
+      temporaryPromotionReceipt()
+        ..['request_digest'] = 'sha256:${List.filled(64, 'd').join()}',
+    );
+    await expectPromotionRejected(
+      temporaryPromotionReceipt()
+        ..['document_service_receipt_ref'] =
+            'other-service://promotion/61111111-1111-4111-8111-111111111111/71111111-1111-4111-8111-111111111111',
+    );
+  });
 
   test('verified session loads from the same profile-scoped gateway', () async {
     final rawVerification = {
