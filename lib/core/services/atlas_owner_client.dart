@@ -379,7 +379,9 @@ class AtlasOwnerClient
         _timestamp(raw['promoted_at']) == null ||
         raw['document_service_receipt_ref'] != expectedDocumentReceipt ||
         (raw.containsKey('idempotent_replay') &&
-            raw['idempotent_replay'] is! bool)) {
+            raw['idempotent_replay'] is! bool) ||
+        (raw.containsKey('idempotent_replay') &&
+            raw['idempotent_replay'] != true)) {
       throw const FormatException(
         'Temporary Content promotion receipt drifted',
       );

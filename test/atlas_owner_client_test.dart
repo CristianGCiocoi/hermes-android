@@ -399,6 +399,9 @@ void main() {
         ..['document_service_receipt_ref'] =
             'other-service://promotion/61111111-1111-4111-8111-111111111111/71111111-1111-4111-8111-111111111111',
     );
+    await expectPromotionRejected(
+      temporaryPromotionReceipt()..['idempotent_replay'] = false,
+    );
   });
 
   test('verified session loads from the same profile-scoped gateway', () async {
