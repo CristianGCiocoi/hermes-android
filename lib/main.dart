@@ -12,7 +12,10 @@ import 'core/utils/responsive.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final prefs = await SharedPreferences.getInstance();
-  final connManager = await ConnectionManager.create(prefs);
+  final connManager = await ConnectionManager.create(
+    prefs,
+    metadataStore: SharedPreferencesAsyncConnectionMetadataStore(),
+  );
   runApp(HermesApp(connManager: connManager));
 }
 
