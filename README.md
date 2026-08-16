@@ -7,10 +7,11 @@
 
 ATLAS owner enrichment is an explicit per-connection option. It is off by
 default, so a normal Hermes Agent Gateway continues to provide chat and native
-Projects without any ATLAS service. When enabled for one exact Profile path,
-the app uses same-origin `/owner/v1` contracts and fails closed if that owner
-boundary is absent or rejects the request; it never substitutes client-local
-Profile, Project, or Coordination authority.
+Projects without any ATLAS service. When enabled for the default Organizator
+route or one exact Profile path such as `/personal`, the app uses same-origin
+`/owner/v1` contracts and fails closed if that owner boundary is absent or
+rejects the request; it never substitutes client-local Profile, Project, or
+Coordination authority.
 
 Android client for [Hermes Agent](https://hermes-agent.nousresearch.com/) — chat with your Hermes sessions from a phone or tablet over local Wi-Fi or a private Tailscale network.
 

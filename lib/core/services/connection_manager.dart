@@ -13,10 +13,6 @@ import '../models/session.dart';
 export '../models/connection.dart';
 export '../models/session.dart';
 
-bool _validAtlasOwnerPrefix(String? value) =>
-    value != null &&
-    RegExp(r'^/(?:profile/)?[a-z][a-z0-9_-]{1,63}$').hasMatch(value);
-
 /// Injectable secret storage boundary used by [ConnectionManager].
 ///
 /// The production implementation is backed by Android Keystore through
@@ -214,7 +210,7 @@ class ConnectionManager {
     String? dashboardPassword,
   }) async {
     final gateway = gatewayPrefix?.trim();
-    if (atlasOwnerEnabled && !_validAtlasOwnerPrefix(gateway)) {
+    if (atlasOwnerEnabled && !isAtlasOwnerGatewayPrefix(gateway)) {
       throw ArgumentError('ATLAS owner mode requires one exact Profile prefix');
     }
     final normalized = SavedConnection.normalizeHostAndPort(host, port);
@@ -274,7 +270,7 @@ class ConnectionManager {
 
     final normalized = SavedConnection.normalizeHostAndPort(host, port);
     final gateway = gatewayPrefix?.trim();
-    if (atlasOwnerEnabled && !_validAtlasOwnerPrefix(gateway)) {
+    if (atlasOwnerEnabled && !isAtlasOwnerGatewayPrefix(gateway)) {
       throw ArgumentError('ATLAS owner mode requires one exact Profile prefix');
     }
     final dashboard = dashboardPrefix?.trim();
@@ -336,6 +332,13 @@ class ConnectionManager {
     final p = password.trim();
     final gateway = gatewayPrefix?.trim();
     final dashboard = dashboardPrefix?.trim();
+    final ownerGateway = gatewayPrefix == null
+        ? current[idx].gatewayPrefix
+        : gateway;
+    if (current[idx].atlasOwnerEnabled &&
+        !isAtlasOwnerGatewayPrefix(ownerGateway)) {
+      throw ArgumentError('ATLAS owner mode requires one exact Profile prefix');
+    }
     current[idx] = current[idx].copyWith(
       gatewayPrefix: gateway == null || gateway.isEmpty ? null : gateway,
       clearGatewayPrefix: gateway != null && gateway.isEmpty,

@@ -833,7 +833,7 @@ void main() {
             'hermes.example.test',
             443,
             'key',
-            gatewayPrefix: '/profile/personal/extra',
+            gatewayPrefix: '/profile/personal',
             atlasOwnerEnabled: true,
           ),
           throwsArgumentError,
@@ -845,9 +845,18 @@ void main() {
           'hermes.example.test',
           443,
           'key',
-          gatewayPrefix: '/profile/personal',
+          gatewayPrefix: '/personal',
           atlasOwnerEnabled: true,
         );
+        expect(mgr.getConnections().single.atlasOwnerEnabled, isTrue);
+
+        await mgr.updateDashboardAuth(
+          mgr.getConnections().single.id,
+          gatewayPrefix: '',
+          username: '',
+          password: '',
+        );
+        expect(mgr.getConnections().single.gatewayPrefix, isNull);
         expect(mgr.getConnections().single.atlasOwnerEnabled, isTrue);
       },
     );
@@ -1083,7 +1092,7 @@ void main() {
         port: 443,
         apiKey: 'key',
         useHttps: true,
-        gatewayPrefix: '/profile/personal',
+        gatewayPrefix: '/personal',
       );
       expect(generic.atlasOwnerEnabled, isFalse);
       expect(generic.toMap().containsKey('atlas_owner_enabled'), isFalse);
@@ -1091,6 +1100,13 @@ void main() {
       final atlas = generic.copyWith(atlasOwnerEnabled: true);
       expect(atlas.toMap()['atlas_owner_enabled'], isTrue);
       expect(SavedConnection.fromMap(atlas.toMap()).atlasOwnerEnabled, isTrue);
+      expect(
+        () => SavedConnection.fromMap({
+          ...atlas.toMap(),
+          'gateway_prefix': '/profile/personal',
+        }),
+        throwsFormatException,
+      );
     });
 
     test('SavedConnection preserves an optional Desktop gateway URL', () {

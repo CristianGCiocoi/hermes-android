@@ -905,13 +905,11 @@ class _AddDialogState extends State<_AddDialog> {
     final dashboardPrefix = _dashboardPrefix.text.trim();
 
     if (label.isEmpty || host.isEmpty || port <= 0) return;
-    if (_atlasOwnerEnabled &&
-        !RegExp(
-          r'^/(?:profile/)?[a-z][a-z0-9_-]{1,63}$',
-        ).hasMatch(gatewayPrefix)) {
+    if (_atlasOwnerEnabled && !isAtlasOwnerGatewayPrefix(gatewayPrefix)) {
       setState(() {
         _error =
-            'ATLAS owner enrichment requires one exact Profile path prefix.';
+            'ATLAS owner enrichment requires the default Organizator route '
+            'or one exact Profile path such as /personal.';
       });
       return;
     }
@@ -1130,8 +1128,7 @@ class _AddDialogState extends State<_AddDialog> {
                 controller: _gatewayPrefix,
                 decoration: const InputDecoration(
                   labelText: 'Gateway path prefix',
-                  hintText:
-                      'e.g. /profile/peter (proxy path before /api/ and /v1/)',
+                  hintText: 'e.g. /personal (blank uses default Organizator)',
                 ),
                 autocorrect: false,
               ),

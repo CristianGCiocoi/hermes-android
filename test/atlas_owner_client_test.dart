@@ -19,11 +19,21 @@ SavedConnection connection({String? prefix = '/personal'}) => SavedConnection(
 );
 
 void main() {
-  test('profile request is optional, generic, and hostname independent', () {
-    expect(atlasOwnerProfileRequest(connection(prefix: null)), isNull);
+  test('profile request matches live owner route shapes only', () {
+    expect(
+      atlasOwnerProfileRequest(
+        connection(prefix: null).copyWith(atlasOwnerEnabled: false),
+      ),
+      isNull,
+    );
     expect(atlasOwnerProfileRequest(connection(prefix: '/nested/a/b')), isNull);
     expect(atlasOwnerProfileRequest(connection()), 'personal');
-    expect(atlasOwnerProfileRequest(connection(prefix: '/profile/pro')), 'pro');
+    expect(atlasOwnerProfileRequest(connection(prefix: '/pro')), 'pro');
+    expect(
+      atlasOwnerProfileRequest(connection(prefix: '/profile/pro')),
+      isNull,
+    );
+    expect(atlasOwnerProfileRequest(connection(prefix: null)), 'organizator');
   });
 
   test('adapter construction requires explicit ATLAS opt-in', () {
@@ -78,6 +88,23 @@ void main() {
   );
 
   test(
+    'owner response has one absolute deadline, not a chunk-gap timeout',
+    () async {
+      final owner = AtlasOwnerClient.fromConnection(
+        connection(),
+        httpClient: _DripClient(),
+        requestTimeout: const Duration(milliseconds: 35),
+      );
+      addTearDown(owner.close);
+
+      await expectLater(
+        owner.listProjectContexts(canonicalProfileId: 'personal'),
+        throwsFormatException,
+      );
+    },
+  );
+
+  test(
     'binding request is exact and carries deterministic caller key',
     () async {
       final client = AtlasOwnerClient.fromConnection(
@@ -109,6 +136,102 @@ void main() {
       );
     },
   );
+
+  test(
+    'Temporary upload stays non-durable and uses the owner contract',
+    () async {
+      const temporary = '51111111-1111-4111-8111-111111111111';
+      final client = AtlasOwnerClient.fromConnection(
+        connection(),
+        httpClient: MockClient((request) async {
+          expect(request.method, 'POST');
+          expect(request.url.path, '/personal/owner/v1/temporary-content');
+          expect(request.url.queryParameters, {
+            'conversation_id': 'conversation-1',
+            'filename': 'note.txt',
+            'mime_type': 'text/plain',
+          });
+          expect(request.headers['idempotency-key'], 'mobile-temp:test-1');
+          expect(request.bodyBytes, utf8.encode('temporary fixture'));
+          return http.Response(
+            jsonEncode({
+              'authority': 'temporary-content-core',
+              'storage_authority': 'workspace-storage',
+              'document_id': null,
+              'temporary_content_id': temporary,
+              'origin_profile_id': 'personal',
+              'origin_session_id': 'conversation-1',
+              'mime_type': 'text/plain',
+              'size_bytes': 17,
+              'lifecycle_status': 'AVAILABLE',
+              'storage_status': 'AVAILABLE',
+              'promotion_status': 'NOT_REQUESTED',
+            }),
+            200,
+          );
+        }),
+      );
+      addTearDown(client.close);
+
+      final receipt = await client.uploadTemporaryContent(
+        canonicalProfileId: 'personal',
+        conversationId: 'conversation-1',
+        filename: 'note.txt',
+        mimeType: 'text/plain',
+        bytes: utf8.encode('temporary fixture'),
+        idempotencyKey: 'mobile-temp:test-1',
+      );
+      expect(receipt['temporary_content_id'], temporary);
+      expect(receipt['document_id'], isNull);
+    },
+  );
+
+  test('explicit Promote accepts one exact durable owner receipt', () async {
+    const temporary = '51111111-1111-4111-8111-111111111111';
+    const document = '61111111-1111-4111-8111-111111111111';
+    const version = '71111111-1111-4111-8111-111111111111';
+    final authorizationDigest = 'sha256:${List.filled(64, 'a').join()}';
+    final client = AtlasOwnerClient.fromConnection(
+      connection(),
+      httpClient: MockClient((request) async {
+        expect(request.method, 'POST');
+        expect(
+          request.url.path,
+          '/personal/owner/v1/temporary-content/$temporary/promote',
+        );
+        expect(request.headers['idempotency-key'], 'mobile-promote:test-1');
+        expect(jsonDecode(request.body), {
+          'conversation_id': 'conversation-1',
+          'authorization_ref': 'approval://temporary-content/mobile/test-1',
+          'authorization_digest': authorizationDigest,
+        });
+        return http.Response(
+          jsonEncode({
+            'authority': 'temporary-content-core',
+            'durable_authority': 'document-service',
+            'promotion_status': 'PROMOTED',
+            'temporary_content_id': temporary,
+            'document_id': document,
+            'document_version_id': version,
+            'idempotent_replay': true,
+          }),
+          200,
+        );
+      }),
+    );
+    addTearDown(client.close);
+
+    final receipt = await client.promoteTemporaryContent(
+      canonicalProfileId: 'personal',
+      conversationId: 'conversation-1',
+      temporaryContentId: temporary,
+      idempotencyKey: 'mobile-promote:test-1',
+      authorizationRef: 'approval://temporary-content/mobile/test-1',
+      authorizationDigest: authorizationDigest,
+    );
+    expect(receipt['document_id'], document);
+    expect(receipt['idempotent_replay'], isTrue);
+  });
 
   test('verified session loads from the same profile-scoped gateway', () async {
     final rawVerification = {
@@ -186,4 +309,15 @@ void main() {
     );
     expect(calls, 0);
   });
+}
+
+class _DripClient extends http.BaseClient {
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    final stream = Stream<List<int>>.periodic(
+      const Duration(milliseconds: 20),
+      (_) => utf8.encode(' '),
+    ).take(10);
+    return http.StreamedResponse(stream, 200);
+  }
 }
