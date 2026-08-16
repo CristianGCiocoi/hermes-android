@@ -185,7 +185,7 @@ class AtlasTemporaryAttachmentCapability {
 }
 
 final _atlasUuid = RegExp(
-  r'^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$',
+  r'^[0-9a-f]{8}-[0-9a-f]{4}-[47][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$',
 );
 
 bool _exactWireKeys(Map<String, dynamic> value, Set<String> keys) =>

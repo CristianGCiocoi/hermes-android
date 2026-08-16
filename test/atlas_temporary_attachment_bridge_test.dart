@@ -2,9 +2,17 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/material.dart';
 import 'package:crypto/crypto.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:hermes_android/core/models/attachment_draft.dart';
+import 'package:hermes_android/core/screens/chat_screen.dart';
+import 'package:hermes_android/core/services/connection_manager.dart';
 import 'package:hermes_android/core/services/ws_client.dart';
+import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
+
+import 'support/fake_voice_composer_adapter.dart';
 
 Map<String, dynamic> readyWith(Object? capability) => <String, dynamic>{
   'jsonrpc': '2.0',
@@ -22,6 +30,10 @@ Map<String, dynamic> readyWith(Object? capability) => <String, dynamic>{
 };
 
 void main() {
+  setUp(() {
+    SharedPreferences.setMockInitialValues({'verbose_mode': false});
+  });
+
   test(
     'generic Gateway absence keeps ATLAS attachment capability disabled',
     () {
@@ -75,9 +87,9 @@ void main() {
   });
 
   test('file attach and explicit promote consume exact owner receipts', () async {
-    const temporary = '51111111-1111-4111-8111-111111111111';
-    const document = '61111111-1111-4111-8111-111111111111';
-    const version = '71111111-1111-4111-8111-111111111111';
+    const temporary = '018f6f4e-7b2a-7c10-8c33-4f0d7214c101';
+    const document = '018f6f4e-7b2a-7c10-8c33-4f0d7214c104';
+    const version = '018f6f4e-7b2a-7c10-8c33-4f0d7214c105';
     final bytes = utf8.encode('fake');
     final contentHash = 'sha256:${sha256.convert(bytes)}';
     final requests = <Map<String, dynamic>>[];
@@ -152,8 +164,8 @@ void main() {
                   'authority': 'temporary-content-core',
                   'durable_authority': 'document-service',
                   'promotion_status': 'PROMOTED',
-                  'receipt_id': '81111111-1111-4111-8111-111111111111',
-                  'attempt_id': '91111111-1111-4111-8111-111111111111',
+                  'receipt_id': '018f6f4e-7b2a-7c10-8c33-4f0d7214c102',
+                  'attempt_id': '018f6f4e-7b2a-7c10-8c33-4f0d7214c103',
                   'temporary_content_id': temporary,
                   'document_id': document,
                   'document_version_id': version,
@@ -208,4 +220,100 @@ void main() {
       await server.close(force: true);
     }
   });
+
+  testWidgets('temporary Promote remains visible until successful retry', (
+    tester,
+  ) async {
+    final draft = AttachmentDraft(
+      id: 'temporary-draft-1',
+      cachedPath: 'C:/synthetic/temporary-draft-1.txt',
+      name: 'temporary-draft-1.txt',
+      byteLength: 4,
+      mediaType: 'text/plain',
+      kind: AttachmentDraftKind.genericFile,
+      status: AttachmentDraftStatus.attached,
+      temporaryContentId: '018f6f4e-7b2a-7c10-8c33-4f0d7214c101',
+    );
+    var promoteCalls = 0;
+    final apiClient = ApiClient(
+      baseUrl: 'http://temporary.fixture',
+      apiKey: 'synthetic-key',
+      httpClient: _EmptyChatHttpClient(),
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatScreen(
+          connection: SavedConnection(
+            id: 'temporary-fixture',
+            label: 'Temporary fixture',
+            host: 'temporary.fixture',
+            port: 8642,
+            apiKey: 'synthetic-key',
+          ),
+          session: const Session(
+            id: 'conversation-1',
+            title: 'Temporary chat',
+            model: 'fixture-model',
+            source: 'test',
+            messageCount: 0,
+            isActive: true,
+            preview: '',
+            startedAt: 1,
+          ),
+          testApiClient: apiClient,
+          testInitialPendingPromotions: [draft],
+          testRemoteTemporaryPromote:
+              ({
+                required temporaryContentId,
+                required clientAttachmentId,
+              }) async {
+                promoteCalls += 1;
+                return <String, dynamic>{'promotion_status': 'PROMOTED'};
+              },
+          testVoiceComposerAdapter: FakeVoiceComposerAdapter(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.textContaining('is temporary, not a Document.'),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const Key('promote-temporary-attachments')),
+      findsOneWidget,
+    );
+    await tester.pump(const Duration(seconds: 20));
+    expect(
+      find.byKey(const Key('promote-temporary-attachments')),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.byKey(const Key('promote-temporary-attachments')));
+    await tester.pumpAndSettle();
+    expect(promoteCalls, 1);
+    expect(
+      find.byKey(const Key('promote-temporary-attachments')),
+      findsNothing,
+    );
+  });
+}
+
+class _EmptyChatHttpClient extends http.BaseClient {
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    if (request.method == 'GET' && request.url.path.endsWith('/messages')) {
+      return http.StreamedResponse(
+        Stream.value(utf8.encode(jsonEncode({'data': <Object>[]}))),
+        200,
+        headers: {'content-type': 'application/json'},
+      );
+    }
+    return http.StreamedResponse(
+      Stream.value(utf8.encode(jsonEncode({'error': 'unexpected request'}))),
+      404,
+      headers: {'content-type': 'application/json'},
+    );
+  }
 }

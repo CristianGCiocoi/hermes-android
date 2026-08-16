@@ -99,6 +99,13 @@ typedef TestRemoteAttachmentUpload =
       required String dataUrl,
     });
 
+@visibleForTesting
+typedef TestRemoteTemporaryPromote =
+    Future<Map<String, dynamic>> Function({
+      required String temporaryContentId,
+      required String clientAttachmentId,
+    });
+
 class _PendingSensitivePrompt {
   final GatewaySensitivePromptRequest request;
   final int responseGeneration;
@@ -137,6 +144,12 @@ class ChatScreen extends StatefulWidget {
   final List<AttachmentDraft> testInitialAttachmentDrafts;
 
   @visibleForTesting
+  final List<AttachmentDraft> testInitialPendingPromotions;
+
+  @visibleForTesting
+  final TestRemoteTemporaryPromote? testRemoteTemporaryPromote;
+
+  @visibleForTesting
   final VoiceComposerAdapter? testVoiceComposerAdapter;
 
   const ChatScreen({
@@ -149,6 +162,8 @@ class ChatScreen extends StatefulWidget {
     this.testRemotePromptSubmit,
     this.testRemoteAttachmentUpload,
     this.testInitialAttachmentDrafts = const [],
+    this.testInitialPendingPromotions = const [],
+    this.testRemoteTemporaryPromote,
     this.testVoiceComposerAdapter,
     super.key,
   });
@@ -181,6 +196,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   final _textController = TextEditingController();
   final _imagePicker = ImagePicker();
   final List<AttachmentDraft> _attachmentDrafts = [];
+  final List<AttachmentDraft> _pendingPromotions = [];
+  bool _promotingTemporaryAttachments = false;
   String? _sessionModel;
   String? _sessionProvider;
   String? _sessionReasoningEffort;
@@ -251,6 +268,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           widget.testVoiceComposerAdapter ?? SpeechToTextVoiceComposerAdapter(),
     )..addListener(_onVoiceComposerChanged);
     _attachmentDrafts.addAll(widget.testInitialAttachmentDrafts);
+    _pendingPromotions.addAll(widget.testInitialPendingPromotions);
     _gatewayNotices = List<GatewayNotice>.from(
       _savedGatewayNotices[_gatewayNoticeIdentity] ?? const [],
     );
@@ -1103,50 +1121,51 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     );
   }
 
-  void _offerTemporaryPromotion(
-    DesktopGatewayClient desktopGateway,
-    List<AttachmentDraft> attachments,
-  ) {
+  void _trackTemporaryPromotion(List<AttachmentDraft> attachments) {
     final temporary = attachments
-        .where((draft) => draft.temporaryContentId != null)
+        .where(
+          (draft) =>
+              draft.temporaryContentId != null &&
+              draft.promotionReceipt == null &&
+              !_pendingPromotions.any((pending) => pending.id == draft.id),
+        )
         .toList(growable: false);
     if (temporary.isEmpty || !mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          temporary.length == 1
-              ? '${temporary.first.name} is temporary and not a Document.'
-              : '${temporary.length} attachments are temporary and not Documents.',
-        ),
-        duration: const Duration(seconds: 12),
-        action: SnackBarAction(
-          label: 'Promote',
-          onPressed: () => unawaited(
-            _promoteTemporaryAttachments(desktopGateway, temporary),
-          ),
-        ),
-      ),
-    );
+    setState(() => _pendingPromotions.addAll(temporary));
   }
 
   Future<void> _promoteTemporaryAttachments(
-    DesktopGatewayClient desktopGateway,
+    DesktopGatewayClient? desktopGateway,
     List<AttachmentDraft> attachments,
   ) async {
+    if (_promotingTemporaryAttachments ||
+        (desktopGateway == null && widget.testRemoteTemporaryPromote == null)) {
+      return;
+    }
+    setState(() => _promotingTemporaryAttachments = true);
     try {
       for (final draft in attachments) {
         final temporaryContentId = draft.temporaryContentId;
         if (temporaryContentId == null || draft.promotionReceipt != null) {
           continue;
         }
-        draft.promotionReceipt = await desktopGateway
-            .promoteTemporaryAttachment(
-              sessionId: widget.session.id,
-              temporaryContentId: temporaryContentId,
-              clientAttachmentId: draft.id,
-            );
+        draft.promotionReceipt = widget.testRemoteTemporaryPromote != null
+            ? await widget.testRemoteTemporaryPromote!(
+                temporaryContentId: temporaryContentId,
+                clientAttachmentId: draft.id,
+              )
+            : await desktopGateway!.promoteTemporaryAttachment(
+                sessionId: widget.session.id,
+                temporaryContentId: temporaryContentId,
+                clientAttachmentId: draft.id,
+              );
       }
       if (!mounted) return;
+      setState(
+        () => _pendingPromotions.removeWhere(
+          (draft) => draft.promotionReceipt != null,
+        ),
+      );
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Document promotion completed.'),
@@ -1161,6 +1180,10 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           backgroundColor: Colors.orange,
         ),
       );
+    } finally {
+      if (mounted) {
+        setState(() => _promotingTemporaryAttachments = false);
+      }
     }
   }
 
@@ -1716,8 +1739,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
             _messages.add({'role': 'assistant', 'content': ''});
             turnAdded = true;
           });
-          if (desktopGateway != null) {
-            _offerTemporaryPromotion(desktopGateway, attachments);
+          if (desktopGateway != null ||
+              widget.testRemoteTemporaryPromote != null) {
+            _trackTemporaryPromotion(attachments);
           }
           _scheduleStreamingFollow();
           void onEvent(StreamEvent event) {
@@ -2779,6 +2803,55 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                 ),
               ),
             ),
+            if (_pendingPromotions.isNotEmpty)
+              Container(
+                width: double.infinity,
+                margin: const EdgeInsets.fromLTRB(4, 4, 4, 8),
+                padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.tertiaryContainer,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Semantics(
+                  label: 'Temporary attachments awaiting promotion',
+                  child: Row(
+                    children: [
+                      const Icon(Icons.hourglass_bottom, size: 20),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          _pendingPromotions.length == 1
+                              ? '${_pendingPromotions.first.name} is temporary, not a Document.'
+                              : '${_pendingPromotions.length} attachments are temporary, not Documents.',
+                        ),
+                      ),
+                      FilledButton.icon(
+                        key: const Key('promote-temporary-attachments'),
+                        onPressed: _promotingTemporaryAttachments
+                            ? null
+                            : () => unawaited(
+                                _promoteTemporaryAttachments(
+                                  _desktopGateway,
+                                  List<AttachmentDraft>.from(
+                                    _pendingPromotions,
+                                  ),
+                                ),
+                              ),
+                        icon: _promotingTemporaryAttachments
+                            ? const SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : const Icon(Icons.drive_file_move, size: 18),
+                        label: const Text('Promote'),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
             if (_attachmentDrafts.isNotEmpty)
               Container(
                 width: double.infinity,
