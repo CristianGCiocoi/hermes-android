@@ -92,9 +92,6 @@ class AtlasOwnerClient
   static final RegExp _mimeType = RegExp(
     r'^[a-z0-9][a-z0-9!#$&^_.+-]{0,126}/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,126}$',
   );
-  static final RegExp _reference = RegExp(
-    r'^[a-z][a-z0-9+.-]*://[A-Za-z0-9][A-Za-z0-9._:/-]{0,1023}$',
-  );
 
   static bool _exactKeys(Map<String, dynamic> value, Set<String> expected) =>
       value.length == expected.length && expected.containsAll(value.keys);
@@ -108,12 +105,6 @@ class AtlasOwnerClient
 
   static bool _uuidValue(Object? value) =>
       value is String && _uuid.hasMatch(value);
-
-  static bool _safeReference(Object? value) =>
-      value is String &&
-      value.length <= 1030 &&
-      _reference.hasMatch(value) &&
-      isSecretFreeProjectValue(value);
 
   @override
   Future<List<Map<String, dynamic>>> listProjectContexts({
@@ -261,6 +252,9 @@ class AtlasOwnerClient
         ? 'workspace://0x_Temp/$canonicalProfileId/$temporaryContentId/$filename'
         : null;
     final expectedContentHash = 'sha256:${sha256.convert(bytes)}';
+    final expectedEvidenceRef =
+        'storage-receipt://workspace-storage/$temporaryContentId/'
+        '$expectedContentHash';
     if (!_exactKeys(raw, uploadKeys) ||
         raw['authority'] != 'temporary-content-core' ||
         raw['storage_authority'] != 'workspace-storage' ||
@@ -299,10 +293,12 @@ class AtlasOwnerClient
         provenance['actor_profile_id'] != canonicalProfileId ||
         provenance['conversation_ref'] != 'hermes://session/$conversationId' ||
         provenance['correlation_id'] != idempotencyKey ||
-        !_safeReference(provenance['evidence_ref']) ||
+        provenance['evidence_ref'] != expectedEvidenceRef ||
         raw['failure_metadata'] != null ||
         (raw.containsKey('idempotent_replay') &&
-            raw['idempotent_replay'] is! bool)) {
+            raw['idempotent_replay'] is! bool) ||
+        (raw.containsKey('idempotent_replay') &&
+            raw['idempotent_replay'] != true)) {
       throw const FormatException('Temporary Content receipt drifted');
     }
     return raw;

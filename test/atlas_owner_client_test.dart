@@ -56,7 +56,9 @@ Map<String, dynamic> temporaryUploadReceipt({
       'actor_profile_id': 'personal',
       'conversation_ref': 'hermes://session/conversation-1',
       'correlation_id': 'mobile-temp:test-1',
-      'evidence_ref': 'storage-receipt://workspace-storage/$temporary/fixture',
+      'evidence_ref':
+          'storage-receipt://workspace-storage/$temporary/'
+          'sha256:${sha256.convert(utf8.encode('temporary fixture'))}',
     },
     'failure_metadata': null,
   };
@@ -378,6 +380,15 @@ void main() {
     await expectUploadRejected(
       temporaryUploadReceipt()
         ..['content_hash'] = 'sha256:${List.filled(64, 'c').join()}',
+    );
+    await expectUploadRejected(
+      temporaryUploadReceipt()
+        ..['provenance']['evidence_ref'] =
+            'storage-receipt://workspace-storage/'
+            '51111111-1111-4111-8111-111111111111/fixture',
+    );
+    await expectUploadRejected(
+      temporaryUploadReceipt()..['idempotent_replay'] = false,
     );
     await expectPromotionRejected(
       temporaryPromotionReceipt()
