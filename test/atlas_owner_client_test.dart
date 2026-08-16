@@ -18,6 +18,70 @@ SavedConnection connection({String? prefix = '/personal'}) => SavedConnection(
   atlasOwnerEnabled: true,
 );
 
+Map<String, dynamic> temporaryUploadReceipt({
+  String? originProjectId,
+  bool idempotentReplay = false,
+}) {
+  const temporary = '51111111-1111-4111-8111-111111111111';
+  final receipt = <String, dynamic>{
+    'authority': 'temporary-content-core',
+    'storage_authority': 'workspace-storage',
+    'document_id': null,
+    'temporary_content_id': temporary,
+    'content_kind': 'ATTACHMENT',
+    'mime_type': 'text/plain',
+    'size_bytes': 17,
+    'content_hash': 'sha256:${List.filled(64, 'a').join()}',
+    'storage_reference': 'workspace://0x_Temp/personal/$temporary/note.txt',
+    'origin_type': 'UPLOAD',
+    'origin_profile_id': 'personal',
+    'origin_session_id': 'conversation-1',
+    'origin_project_id': originProjectId,
+    'origin_channel': 'hermes-mobile',
+    'origin_producer_ref': 'hermes-mobile://owner-provider/upload',
+    'parent_temporary_content_id': null,
+    'created_at': '2026-08-16T10:00:00Z',
+    'updated_at': '2026-08-16T10:00:00Z',
+    'expires_at': '2026-08-23T10:00:00Z',
+    'retention_class': 'SHORT',
+    'lifecycle_status': 'AVAILABLE',
+    'processing_status': 'NOT_REQUESTED',
+    'promotion_status': 'NOT_REQUESTED',
+    'storage_status': 'AVAILABLE',
+    'retention_status': 'ACTIVE',
+    'revision': 2,
+    'provenance': {
+      'actor_profile_id': 'personal',
+      'conversation_ref': 'hermes://session/conversation-1',
+      'correlation_id': 'mobile-temp:test-1',
+      'evidence_ref': 'storage-receipt://workspace-storage/$temporary/fixture',
+    },
+    'failure_metadata': null,
+  };
+  if (idempotentReplay) receipt['idempotent_replay'] = true;
+  return receipt;
+}
+
+Map<String, dynamic> temporaryPromotionReceipt({bool idempotentReplay = true}) {
+  final receipt = <String, dynamic>{
+    'authority': 'temporary-content-core',
+    'durable_authority': 'document-service',
+    'promotion_status': 'PROMOTED',
+    'receipt_id': '81111111-1111-4111-8111-111111111111',
+    'attempt_id': '91111111-1111-4111-8111-111111111111',
+    'temporary_content_id': '51111111-1111-4111-8111-111111111111',
+    'document_id': '61111111-1111-4111-8111-111111111111',
+    'document_version_id': '71111111-1111-4111-8111-111111111111',
+    'idempotency_key': 'mobile-promote:test-1',
+    'request_digest': 'sha256:${List.filled(64, 'b').join()}',
+    'promoted_at': '2026-08-16T10:01:00Z',
+    'document_service_receipt_ref':
+        'document-service://promotion/61111111-1111-4111-8111-111111111111/71111111-1111-4111-8111-111111111111',
+  };
+  if (idempotentReplay) receipt['idempotent_replay'] = true;
+  return receipt;
+}
+
 void main() {
   test('profile request matches live owner route shapes only', () {
     expect(
@@ -153,22 +217,7 @@ void main() {
           });
           expect(request.headers['idempotency-key'], 'mobile-temp:test-1');
           expect(request.bodyBytes, utf8.encode('temporary fixture'));
-          return http.Response(
-            jsonEncode({
-              'authority': 'temporary-content-core',
-              'storage_authority': 'workspace-storage',
-              'document_id': null,
-              'temporary_content_id': temporary,
-              'origin_profile_id': 'personal',
-              'origin_session_id': 'conversation-1',
-              'mime_type': 'text/plain',
-              'size_bytes': 17,
-              'lifecycle_status': 'AVAILABLE',
-              'storage_status': 'AVAILABLE',
-              'promotion_status': 'NOT_REQUESTED',
-            }),
-            200,
-          );
+          return http.Response(jsonEncode(temporaryUploadReceipt()), 200);
         }),
       );
       addTearDown(client.close);
@@ -205,18 +254,7 @@ void main() {
           'authorization_ref': 'approval://temporary-content/mobile/test-1',
           'authorization_digest': authorizationDigest,
         });
-        return http.Response(
-          jsonEncode({
-            'authority': 'temporary-content-core',
-            'durable_authority': 'document-service',
-            'promotion_status': 'PROMOTED',
-            'temporary_content_id': temporary,
-            'document_id': document,
-            'document_version_id': version,
-            'idempotent_replay': true,
-          }),
-          200,
-        );
+        return http.Response(jsonEncode(temporaryPromotionReceipt()), 200);
       }),
     );
     addTearDown(client.close);
@@ -230,8 +268,56 @@ void main() {
       authorizationDigest: authorizationDigest,
     );
     expect(receipt['document_id'], document);
+    expect(receipt['document_version_id'], version);
     expect(receipt['idempotent_replay'], isTrue);
   });
+
+  test(
+    'Temporary receipts reject missing or mismatched owner fields',
+    () async {
+      final invalidUpload = temporaryUploadReceipt()
+        ..remove('storage_reference');
+      final uploadClient = AtlasOwnerClient.fromConnection(
+        connection(),
+        httpClient: MockClient(
+          (_) async => http.Response(jsonEncode(invalidUpload), 200),
+        ),
+      );
+      addTearDown(uploadClient.close);
+      await expectLater(
+        uploadClient.uploadTemporaryContent(
+          canonicalProfileId: 'personal',
+          conversationId: 'conversation-1',
+          filename: 'note.txt',
+          mimeType: 'text/plain',
+          bytes: utf8.encode('temporary fixture'),
+          idempotencyKey: 'mobile-temp:test-1',
+        ),
+        throwsFormatException,
+      );
+
+      final invalidPromotion = temporaryPromotionReceipt()
+        ..['idempotency_key'] = 'mobile-promote:other';
+      final promotionClient = AtlasOwnerClient.fromConnection(
+        connection(),
+        httpClient: MockClient(
+          (_) async => http.Response(jsonEncode(invalidPromotion), 200),
+        ),
+      );
+      addTearDown(promotionClient.close);
+      await expectLater(
+        promotionClient.promoteTemporaryContent(
+          canonicalProfileId: 'personal',
+          conversationId: 'conversation-1',
+          temporaryContentId: '51111111-1111-4111-8111-111111111111',
+          idempotencyKey: 'mobile-promote:test-1',
+          authorizationRef: 'approval://temporary-content/mobile/test-1',
+          authorizationDigest: 'sha256:${List.filled(64, 'a').join()}',
+        ),
+        throwsFormatException,
+      );
+    },
+  );
 
   test('verified session loads from the same profile-scoped gateway', () async {
     final rawVerification = {

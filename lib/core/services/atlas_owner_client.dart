@@ -91,6 +91,29 @@ class AtlasOwnerClient
   static final RegExp _mimeType = RegExp(
     r'^[a-z0-9][a-z0-9!#$&^_.+-]{0,126}/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,126}$',
   );
+  static final RegExp _digest = RegExp(r'^sha256:[0-9a-f]{64}$');
+  static final RegExp _reference = RegExp(
+    r'^[a-z][a-z0-9+.-]*://[A-Za-z0-9][A-Za-z0-9._:/-]{0,1023}$',
+  );
+
+  static bool _exactKeys(Map<String, dynamic> value, Set<String> expected) =>
+      value.length == expected.length && expected.containsAll(value.keys);
+
+  static DateTime? _timestamp(Object? value) {
+    if (value is! String || value != value.trim()) return null;
+    final parsed = DateTime.tryParse(value);
+    if (parsed == null || !value.contains('T')) return null;
+    return parsed;
+  }
+
+  static bool _uuidValue(Object? value) =>
+      value is String && _uuid.hasMatch(value);
+
+  static bool _safeReference(Object? value) =>
+      value is String &&
+      value.length <= 1030 &&
+      _reference.hasMatch(value) &&
+      isSecretFreeProjectValue(value);
 
   @override
   Future<List<Map<String, dynamic>>> listProjectContexts({
@@ -192,18 +215,94 @@ class AtlasOwnerClient
       contentType: mimeType,
       extraHeaders: {'Idempotency-Key': idempotencyKey},
     );
-    if (raw['authority'] != 'temporary-content-core' ||
+    final uploadKeys = <String>{
+      'authority',
+      'storage_authority',
+      'document_id',
+      'temporary_content_id',
+      'content_kind',
+      'mime_type',
+      'size_bytes',
+      'content_hash',
+      'storage_reference',
+      'origin_type',
+      'origin_profile_id',
+      'origin_session_id',
+      'origin_project_id',
+      'origin_channel',
+      'origin_producer_ref',
+      'parent_temporary_content_id',
+      'created_at',
+      'updated_at',
+      'expires_at',
+      'retention_class',
+      'lifecycle_status',
+      'processing_status',
+      'promotion_status',
+      'storage_status',
+      'retention_status',
+      'revision',
+      'provenance',
+      'failure_metadata',
+      if (raw.containsKey('idempotent_replay')) 'idempotent_replay',
+    };
+    final temporaryContentId = raw['temporary_content_id'];
+    final createdAt = _timestamp(raw['created_at']);
+    final updatedAt = _timestamp(raw['updated_at']);
+    final expiresAt = _timestamp(raw['expires_at']);
+    final provenance = raw['provenance'];
+    final expectedProvenance = <String>{
+      'actor_profile_id',
+      'conversation_ref',
+      'correlation_id',
+      'evidence_ref',
+    };
+    final expectedStorage = temporaryContentId is String
+        ? 'workspace://0x_Temp/$canonicalProfileId/$temporaryContentId/$filename'
+        : null;
+    if (!_exactKeys(raw, uploadKeys) ||
+        raw['authority'] != 'temporary-content-core' ||
         raw['storage_authority'] != 'workspace-storage' ||
         raw['document_id'] != null ||
-        raw['temporary_content_id'] is! String ||
-        !_uuid.hasMatch(raw['temporary_content_id'] as String) ||
+        !_uuidValue(temporaryContentId) ||
+        raw['content_kind'] != 'ATTACHMENT' ||
+        raw['origin_type'] != 'UPLOAD' ||
         raw['origin_profile_id'] != canonicalProfileId ||
         raw['origin_session_id'] != conversationId ||
+        raw['origin_project_id'] != projectId ||
+        raw['origin_channel'] != 'hermes-mobile' ||
+        raw['origin_producer_ref'] != 'hermes-mobile://owner-provider/upload' ||
+        raw['parent_temporary_content_id'] != null ||
         raw['mime_type'] != mimeType ||
         raw['size_bytes'] != bytes.length ||
+        raw['content_hash'] is! String ||
+        !_digest.hasMatch(raw['content_hash'] as String) ||
+        raw['storage_reference'] != expectedStorage ||
+        createdAt == null ||
+        updatedAt == null ||
+        expiresAt == null ||
+        updatedAt.isBefore(createdAt) ||
+        !expiresAt.isAfter(updatedAt) ||
+        raw['retention_class'] != 'SHORT' ||
         raw['lifecycle_status'] != 'AVAILABLE' ||
+        raw['processing_status'] != 'NOT_REQUESTED' ||
         raw['storage_status'] != 'AVAILABLE' ||
-        raw['promotion_status'] != 'NOT_REQUESTED') {
+        raw['promotion_status'] != 'NOT_REQUESTED' ||
+        raw['retention_status'] != 'ACTIVE' ||
+        raw['revision'] is! int ||
+        (raw['revision'] as int) < 1 ||
+        provenance is! Map ||
+        !_exactKeys(
+          Map<String, dynamic>.from(provenance),
+          expectedProvenance,
+        ) ||
+        provenance['actor_profile_id'] != canonicalProfileId ||
+        provenance['conversation_ref'] != 'hermes://session/$conversationId' ||
+        provenance['correlation_id'] != idempotencyKey ||
+        !_safeReference(provenance['evidence_ref']) ||
+        raw['failure_metadata'] != null ||
+        (raw.containsKey('idempotent_replay') &&
+            raw['idempotent_replay'] is! bool)) {
       throw const FormatException('Temporary Content receipt drifted');
     }
     return raw;
@@ -240,15 +339,45 @@ class AtlasOwnerClient
     );
     final documentId = raw['document_id'];
     final versionId = raw['document_version_id'];
-    if (raw['authority'] != 'temporary-content-core' ||
+    final promotionKeys = <String>{
+      'authority',
+      'durable_authority',
+      'promotion_status',
+      'receipt_id',
+      'attempt_id',
+      'temporary_content_id',
+      'document_id',
+      'document_version_id',
+      'idempotency_key',
+      'request_digest',
+      'promoted_at',
+      'document_service_receipt_ref',
+      if (raw.containsKey('idempotent_replay')) 'idempotent_replay',
+    };
+    final receiptId = raw['receipt_id'];
+    final attemptId = raw['attempt_id'];
+    if (!_exactKeys(raw, promotionKeys) ||
+        raw['authority'] != 'temporary-content-core' ||
         raw['durable_authority'] != 'document-service' ||
         raw['promotion_status'] != 'PROMOTED' ||
         raw['temporary_content_id'] != temporaryContentId ||
-        documentId is! String ||
-        versionId is! String ||
-        !_uuid.hasMatch(documentId) ||
-        !_uuid.hasMatch(versionId) ||
-        {temporaryContentId, documentId, versionId}.length != 3 ||
+        !_uuidValue(receiptId) ||
+        !_uuidValue(attemptId) ||
+        !_uuidValue(documentId) ||
+        !_uuidValue(versionId) ||
+        {
+              receiptId,
+              attemptId,
+              temporaryContentId,
+              documentId,
+              versionId,
+            }.length !=
+            5 ||
+        raw['idempotency_key'] != idempotencyKey ||
+        raw['request_digest'] is! String ||
+        !_digest.hasMatch(raw['request_digest'] as String) ||
+        _timestamp(raw['promoted_at']) == null ||
+        !_safeReference(raw['document_service_receipt_ref']) ||
         (raw.containsKey('idempotent_replay') &&
             raw['idempotent_replay'] is! bool)) {
       throw const FormatException(
