@@ -416,6 +416,11 @@ therefore produces effective arm64 code `4127`. CI reads the completed APK with
 `aapt` and fails if that relationship drifts. Release-floor checks continue to
 apply to the base value and must not be weakened to rely on an ABI offset.
 
+The M2 emulator/phone-update canary advances the base to `2131`. Its ARM64
+Debug split is therefore code `4131`, strictly above the accepted physical-phone
+`.18` ARM64 code `4130`; the x86_64 split is code `6131`, strictly above the
+emulator `.18` code `6130`. Package and signing identity remain unchanged.
+
 Output files:
 
 ```text
