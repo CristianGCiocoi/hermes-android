@@ -378,4 +378,56 @@ void main() {
     expect(port.calls, 1);
     expect(find.text('Shared session could not be opened.'), findsNothing);
   });
+
+  testWidgets(
+    'real ATLAS route exposes native Projects without an injected profile',
+    (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      final mock = MockClient((request) async {
+        if (request.url.path == '/personal/health') {
+          return http.Response('{}', 200);
+        }
+        if (request.url.path == '/personal/api/sessions') {
+          return http.Response(jsonEncode({'data': <Object>[]}), 200);
+        }
+        return http.Response('{}', 404);
+      });
+      final connection = SavedConnection(
+        id: 'atlas-personal-route',
+        label: 'ATLAS Personal',
+        host: 'example.test',
+        port: 443,
+        apiKey: 'test-only',
+        useHttps: true,
+        gatewayPrefix: '/personal',
+        atlasOwnerEnabled: true,
+        desktopGatewayUrl: 'https://desktop.example.test',
+      );
+      final api = ApiClient(
+        baseUrl: connection.baseUrl,
+        apiKey: connection.apiKey,
+        pathPrefix: connection.gatewayPrefix ?? '',
+        httpClient: mock,
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: SessionListScreen(
+            connection: connection,
+            turnApplicationController: GatewayTurnApplicationController(),
+            apiClient: api,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Projects'), findsNothing);
+
+      final scaffold = tester.state<ScaffoldState>(find.byType(Scaffold));
+      scaffold.openDrawer();
+      await tester.pumpAndSettle();
+
+      expect(find.text('Projects'), findsOneWidget);
+      expect(find.text('ATLAS Projects'), findsNothing);
+    },
+  );
 }

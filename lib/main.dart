@@ -227,15 +227,15 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _closeDialogAndRefresh(BuildContext dialogContext) async {
     // Let editable controls detach from the IME before removing their route.
-    // Rebuilding HomeScreen while the dialog still owns focus can deactivate
-    // inherited dependencies out of order on Android.
+    // Rebuilding HomeScreen while the dialog still owns focus, or while its
+    // reverse transition still retains inherited dependencies, can deactivate
+    // those dependencies out of order on Android.
     FocusManager.instance.primaryFocus?.unfocus();
     await WidgetsBinding.instance.endOfFrame;
     if (!dialogContext.mounted) return;
     Navigator.of(dialogContext).pop();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _refresh();
-    });
+    await Future<void>.delayed(kThemeAnimationDuration);
+    if (mounted) _refresh();
   }
 
   @override
@@ -700,7 +700,10 @@ class _HomeScreenState extends State<HomeScreen> {
           ],
         ),
       ),
-    ).whenComplete(() {
+    ).whenComplete(() async {
+      // showDialog completes when pop is requested, before the reverse route
+      // transition has necessarily released its editable descendants.
+      await Future<void>.delayed(kThemeAnimationDuration);
       gatewayPrefixCtrl.dispose();
       dashboardPrefixCtrl.dispose();
       portCtrl.dispose();

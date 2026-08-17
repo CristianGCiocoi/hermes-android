@@ -96,6 +96,9 @@ class _SessionListScreenState extends State<SessionListScreen> {
   final Set<String> _branchingSessionIds = {};
   bool _continuityOpenAttempted = false;
 
+  String? get _effectiveProjectProfileId =>
+      widget.canonicalProjectProfileId ?? _canonicalOwnerProfileId;
+
   @override
   void initState() {
     super.initState();
@@ -318,8 +321,7 @@ class _SessionListScreenState extends State<SessionListScreen> {
 
   Future<void> _chooseProjectForSession(Session session) async {
     final controller = _projectCatalogController;
-    final profileId =
-        widget.canonicalProjectProfileId ?? _canonicalOwnerProfileId;
+    final profileId = _effectiveProjectProfileId;
     if (controller == null ||
         controller.atlasEnrichmentEnabled && profileId == null ||
         !mounted) {
@@ -591,14 +593,14 @@ class _SessionListScreenState extends State<SessionListScreen> {
             ),
             if (_projectCatalogController != null &&
                 (!_projectCatalogController.atlasEnrichmentEnabled ||
-                    widget.canonicalProjectProfileId != null))
+                    _effectiveProjectProfileId != null))
               ListTile(
                 leading: const Icon(Icons.account_tree_outlined),
                 title: const Text('Projects'),
                 onTap: () => _openScreen(
                   ProjectsScreen(
                     controller: _projectCatalogController,
-                    canonicalProfileId: widget.canonicalProjectProfileId,
+                    canonicalProfileId: _effectiveProjectProfileId,
                   ),
                 ),
               ),
@@ -762,7 +764,7 @@ class _SessionListScreenState extends State<SessionListScreen> {
                         if (_projectCatalogController != null &&
                             (!_projectCatalogController
                                     .atlasEnrichmentEnabled ||
-                                widget.canonicalProjectProfileId != null))
+                                _effectiveProjectProfileId != null))
                           const PopupMenuItem(
                             value: 'project',
                             child: ListTile(

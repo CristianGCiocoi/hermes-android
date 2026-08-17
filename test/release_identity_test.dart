@@ -4,7 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   test(
-    'Build UX21 has the exact release identity and an upgrade-safe code',
+    'Build UX23 has the exact release identity and an upgrade-safe code',
     () {
       final pubspec = File('pubspec.yaml').readAsStringSync();
       final match = RegExp(
@@ -13,10 +13,10 @@ void main() {
       ).firstMatch(pubspec);
 
       expect(match, isNotNull);
-      expect(match!.group(1), '1.0.21-hermesapk.21');
-      expect(int.parse(match.group(2)!), 2133);
-      expect(int.parse(match.group(2)!), greaterThan(2132));
-      expect(int.parse(match.group(2)!) + 2000, 4133);
+      expect(match!.group(1), '1.0.23-hermesapk.23');
+      expect(int.parse(match.group(2)!), 2135);
+      expect(int.parse(match.group(2)!), greaterThan(2134));
+      expect(int.parse(match.group(2)!) + 2000, 4135);
     },
   );
 
@@ -29,13 +29,13 @@ void main() {
       '.github/workflows/pr-quality.yml',
     ).readAsStringSync();
 
-    expect(gradle, contains('minimumInstalledVersionCode = 2132'));
+    expect(gradle, contains('minimumInstalledVersionCode = 2134'));
     expect(
       gradle,
       contains('check(flutter.versionCode > minimumInstalledVersionCode)'),
     );
-    expect(buildWorkflow, contains("MINIMUM_INSTALLED_VERSION_CODE: '2132'"));
-    expect(buildWorkflow, contains("REQUIRED_BASE_VERSION_CODE: '2133'"));
+    expect(buildWorkflow, contains("MINIMUM_INSTALLED_VERSION_CODE: '2134'"));
+    expect(buildWorkflow, contains("REQUIRED_BASE_VERSION_CODE: '2135'"));
     expect(buildWorkflow, contains("ARM64_SPLIT_VERSION_CODE_OFFSET: '2000'"));
     expect(buildWorkflow, contains('expected_code = base_code + offset'));
     expect(
@@ -45,7 +45,7 @@ void main() {
     expect(buildWorkflow, contains('GITHUB_REF_TYPE'));
     expect(buildWorkflow, contains('Refuse an unsigned tagged release'));
     expect(buildWorkflow, contains("env.HAS_RELEASE_KEYSTORE == 'true'"));
-    expect(qualityWorkflow, contains("MINIMUM_INSTALLED_VERSION_CODE: '2132'"));
-    expect(qualityWorkflow, contains("REQUIRED_BASE_VERSION_CODE: '2133'"));
+    expect(qualityWorkflow, contains("MINIMUM_INSTALLED_VERSION_CODE: '2134'"));
+    expect(qualityWorkflow, contains("REQUIRED_BASE_VERSION_CODE: '2135'"));
   });
 }
