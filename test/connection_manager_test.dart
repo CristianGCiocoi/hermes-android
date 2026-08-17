@@ -949,6 +949,7 @@ void main() {
           dashboardPort: 30433,
           dashboardUsername: 'misha',
           dashboardPassword: 'secret',
+          desktopGatewayUrl: 'https://hermes-desktop.example.lan',
         );
         final id = mgr.getConnections().single.id;
 
@@ -963,6 +964,7 @@ void main() {
           dashboardProxied: false,
           dashboardUsername: '',
           dashboardPassword: '',
+          desktopGatewayUrl: '',
         );
 
         final conn = mgr.getConnections().single;
@@ -978,6 +980,7 @@ void main() {
         expect(conn.dashboardPortOverride, isNull);
         expect(conn.dashboardUsername, isNull);
         expect(conn.dashboardPassword, isNull);
+        expect(conn.desktopGatewayUrl, isNull);
       },
     );
   });

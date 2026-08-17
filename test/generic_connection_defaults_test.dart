@@ -35,4 +35,14 @@ void main() {
     expect(desktopGateway.controller?.text, isEmpty);
     expect(find.textContaining('192.168.1.193'), findsNothing);
   });
+
+  test(
+    'editing preserves an explicit empty Desktop gateway clear sentinel',
+    () {
+      // updateConnection distinguishes null (leave unchanged) from the empty
+      // string (clear). Keep this contract pinned at the dialog boundary.
+      expect(desktopGatewayUrlForConnectionSave('', isEditing: true), '');
+      expect(desktopGatewayUrlForConnectionSave('', isEditing: false), isNull);
+    },
+  );
 }

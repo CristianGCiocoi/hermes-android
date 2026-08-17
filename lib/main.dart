@@ -9,6 +9,14 @@ import 'core/services/text_size_preference.dart';
 import 'core/screens/session_list_screen.dart';
 import 'core/utils/responsive.dart';
 
+String? desktopGatewayUrlForConnectionSave(
+  String value, {
+  required bool isEditing,
+}) {
+  final normalized = value.trim();
+  return isEditing ? normalized : (normalized.isEmpty ? null : normalized);
+}
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final prefs = await SharedPreferences.getInstance();
@@ -1010,7 +1018,14 @@ class _AddDialogState extends State<_AddDialog> {
         atlasOwnerEnabled: _atlasOwnerEnabled,
         dashboardPrefix: dashboardPrefix.isEmpty ? null : dashboardPrefix,
         dashboardProxied: _dashboardProxied,
-        desktopGatewayUrl: desktopGatewayUrl.isEmpty ? null : desktopGatewayUrl,
+        // Preserve an explicit empty value while editing: updateConnection
+        // uses it as the clear sentinel. Converting it to null here would mean
+        // "leave the existing Desktop gateway unchanged" and generic Hermes
+        // would remain coupled to a stale optional transport after save.
+        desktopGatewayUrl: desktopGatewayUrlForConnectionSave(
+          desktopGatewayUrl,
+          isEditing: _isEditing,
+        ),
         dashboardPort: dashPort,
         dashboardUsername: dashUser.isEmpty ? null : dashUser,
         dashboardPassword: dashPass.isEmpty ? null : dashPass,
