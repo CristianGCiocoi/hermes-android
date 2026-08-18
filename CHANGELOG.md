@@ -4,6 +4,85 @@ All notable changes to this project are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Release notes for
 versions prior to 1.0.7 are in the **What's new** sections of the [README](README.md).
 
+## [1.0.26-hermesapk.26] - 2026-08-18
+
+### Fixed
+
+- The inline transcript and the top-right Activity Center now expose distinct
+  projections of the same Gateway state instead of duplicating foreground
+  tools, delegated tasks, and current-turn status.
+- Foreground Reasoning, tools, and delegated work remain collapsed alongside
+  the response. The Activity Center is reserved for recovery state, input
+  requests, notifications, tool failures, background results, and reviews.
+- The Activity badge continues to count only items that need attention; normal
+  completed foreground work does not create a badge or duplicate history.
+
+### Validation
+
+- Generic Gateway behavior and the optional interaction-mode capability are
+  unchanged from `.25`.
+- Flutter analysis passes with zero issues; all 389 Flutter tests pass,
+  including the focused Activity projection, scroll, interaction-mode, and
+  clarification regressions.
+
+## [1.0.25-hermesapk.25] - 2026-08-18
+
+### Added
+
+- Optional per-chat `Standard`, `Interview`, and `Grill` interaction modes,
+  negotiated through an exact versioned Hermes Gateway capability.
+- Server-owned one-question-at-a-time Interview and Grill clarification labels,
+  including the current question step in the existing clarification dialog.
+
+### Compatibility and safety
+
+- Generic and older Gateways remain fully supported in Standard mode. If the
+  capability is absent or malformed, Android sends no `interaction_mode.get`
+  or `interaction_mode.set` request.
+- Mode changes are session-scoped, revision-bound, refused while a turn is
+  active, persisted by Hermes, and accepted by Android only when the RPC receipt
+  exactly matches the subsequent `session.info` readback.
+- Android does not prefix user messages or simulate Interview/Grill locally.
+
+### Validation
+
+- Flutter static analysis passes with zero issues.
+- All 388 Flutter tests pass, including adversarial capability/receipt parsing,
+  generic-Gateway zero-mode-RPC compatibility, session readback, and existing
+  clarification regressions.
+
+## [1.0.24-hermesapk.24] - 2026-08-18
+
+### Added
+
+- A centralized Hermes Activity Center with explicit lifecycle and dismissible
+  review notices, replacing permanent review cards in the transcript.
+- Native creation of Hermes Projects from the Projects screen while preserving
+  the server-owned `projects.list` / `projects.set_active` authority.
+- A per-session permission selector for `Standard` and `Full control`, with
+  strict Gateway readback and fail-closed handling of unsupported values.
+- A unified per-message action menu for Copy, Select text, Share, Read aloud,
+  Edit and resend, and Regenerate response.
+- Five application color palettes and an optional high-contrast mode, applied
+  consistently to light and dark themes.
+
+### Changed
+
+- Streaming answers remain after Reasoning and Hermes activity, activity cards
+  start collapsed, long conversations open at the latest content, and a
+  persistent Latest affordance returns to the end without forcing scroll while
+  the user is reading earlier messages.
+- Standard conversations continue to use the existing individual
+  `clarify.request` / `clarify.respond` flow. Interview and Grill are reserved
+  for a later versioned Agent/Gateway contract and are not simulated locally.
+
+### Validation
+
+- Flutter static analysis passes with zero issues.
+- All 379 Flutter tests pass, including palette persistence, contrast,
+  streaming/scroll, Projects, permissions, Activity Center, and message-menu
+  regressions.
+
 ## [1.0.14-hermesapk.14] - 2026-07-30
 
 ### Added

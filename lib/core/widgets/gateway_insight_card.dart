@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../models/gateway_insight.dart';
@@ -39,8 +41,15 @@ class GatewayReasoningCard extends StatelessWidget {
 
 class GatewayNoticeCard extends StatelessWidget {
   final GatewayNotice notice;
+  final VoidCallback? onView;
+  final Future<void> Function()? onDismiss;
 
-  const GatewayNoticeCard({required this.notice, super.key});
+  const GatewayNoticeCard({
+    required this.notice,
+    this.onView,
+    this.onDismiss,
+    super.key,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -61,18 +70,40 @@ class GatewayNoticeCard extends StatelessWidget {
             ),
             const SizedBox(width: 12),
             Expanded(
-              child: SelectionArea(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      notice.title,
-                      style: Theme.of(context).textTheme.labelLarge,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    notice.title,
+                    style: Theme.of(context).textTheme.labelLarge,
+                  ),
+                  const SizedBox(height: 4),
+                  SelectionArea(
+                    child: Text(
+                      notice.text,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
                     ),
-                    const SizedBox(height: 4),
-                    Text(notice.text),
-                  ],
-                ),
+                  ),
+                  if (onView != null || onDismiss != null)
+                    Wrap(
+                      spacing: 4,
+                      children: [
+                        if (onView != null)
+                          TextButton(
+                            key: ValueKey('view-notice-${notice.identity}'),
+                            onPressed: onView,
+                            child: const Text('View'),
+                          ),
+                        if (onDismiss != null)
+                          TextButton(
+                            key: ValueKey('dismiss-notice-${notice.identity}'),
+                            onPressed: () => unawaited(onDismiss!()),
+                            child: const Text('Dismiss'),
+                          ),
+                      ],
+                    ),
+                ],
               ),
             ),
           ],

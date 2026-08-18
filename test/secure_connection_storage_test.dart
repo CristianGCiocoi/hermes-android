@@ -49,6 +49,24 @@ class _FaultInjectingCredentialStore implements CredentialStore {
   }
 }
 
+class _DurableMetadataStore implements ConnectionMetadataStore {
+  List<String>? values;
+  bool failWrite = false;
+
+  @override
+  Future<List<String>?> read() async => values?.toList();
+
+  @override
+  Future<void> write(List<String> encodedConnections) async {
+    if (failWrite) {
+      throw const CredentialStorageException(
+        'Connection metadata could not be verified safely.',
+      );
+    }
+    values = encodedConnections.toList();
+  }
+}
+
 String _legacyConnection({
   required String id,
   required String label,
@@ -263,6 +281,70 @@ void main() {
     expect(_storedMetadata(prefs), isEmpty);
     expect(store.values, isEmpty);
   });
+
+  test('migrates legacy metadata to the durable store and reloads it after a '
+      'new manager instance', () async {
+    final legacy = <String>[
+      _legacyConnection(
+        id: 'profile-a',
+        label: 'Home',
+        host: 'gateway.example.lan',
+        apiKey: 'synthetic-api-a',
+      ),
+    ];
+    SharedPreferences.setMockInitialValues(<String, Object>{
+      'saved_connections': legacy,
+    });
+    final prefs = await SharedPreferences.getInstance();
+    final credentials = _FaultInjectingCredentialStore();
+    final metadata = _DurableMetadataStore();
+
+    final migrated = await ConnectionManager.create(
+      prefs,
+      credentialStore: credentials,
+      metadataStore: metadata,
+    );
+    expect(migrated.getConnections().single.label, 'Home');
+    expect(metadata.values, hasLength(1));
+    expect(metadata.values!.single, isNot(contains('synthetic-api-a')));
+
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    final emptyLegacyPrefs = await SharedPreferences.getInstance();
+    final reloaded = await ConnectionManager.create(
+      emptyLegacyPrefs,
+      credentialStore: credentials,
+      metadataStore: metadata,
+    );
+    final connection = reloaded.getConnections().single;
+    expect(connection.id, 'profile-a');
+    expect(connection.apiKey, 'synthetic-api-a');
+  });
+
+  test(
+    'durable metadata failure restores the previous credential state',
+    () async {
+      final prefs = await SharedPreferences.getInstance();
+      final credentials = _FaultInjectingCredentialStore();
+      final metadata = _DurableMetadataStore()..failWrite = true;
+      final manager = await ConnectionManager.create(
+        prefs,
+        credentialStore: credentials,
+        metadataStore: metadata,
+      );
+
+      await expectLater(
+        manager.saveConnection(
+          'Home',
+          'gateway.example.lan',
+          8642,
+          'synthetic-api-rejected',
+        ),
+        throwsA(isA<CredentialStorageException>()),
+      );
+      expect(credentials.values, isEmpty);
+      expect(manager.getConnections(), isEmpty);
+    },
+  );
 
   test('failed update read-back restores the prior credentials', () async {
     final prefs = await SharedPreferences.getInstance();

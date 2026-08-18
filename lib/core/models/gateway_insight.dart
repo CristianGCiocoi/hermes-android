@@ -1,3 +1,7 @@
+import 'dart:convert';
+
+import 'package:crypto/crypto.dart';
+
 enum GatewayReasoningEventMode { append, replace }
 
 class GatewayReasoningUpdate {
@@ -93,7 +97,11 @@ class GatewayNotice {
 
   const GatewayNotice({required this.kind, required this.text, this.taskId});
 
-  String get identity => '${kind.name}|${taskId ?? ''}|$text';
+  /// Content-safe stable identity used for deduplication and local dismissals.
+  /// The review/background text itself is never written to preferences.
+  String get identity => sha256
+      .convert(utf8.encode('${kind.name}\u0000${taskId ?? ''}\u0000$text'))
+      .toString();
 
   String get title => switch (kind) {
     GatewayNoticeKind.background =>

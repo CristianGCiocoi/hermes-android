@@ -818,6 +818,49 @@ void main() {
       expect(conn.dashboardPassword, 'secret');
     });
 
+    test(
+      'ATLAS owner mode requires one exact Profile gateway prefix',
+      () async {
+        final prefs = await SharedPreferences.getInstance();
+        final mgr = await ConnectionManager.create(
+          prefs,
+          credentialStore: _MemoryCredentialStore(),
+        );
+
+        await expectLater(
+          mgr.saveConnection(
+            'Invalid',
+            'hermes.example.test',
+            443,
+            'key',
+            gatewayPrefix: '/profile/personal',
+            atlasOwnerEnabled: true,
+          ),
+          throwsArgumentError,
+        );
+        expect(mgr.getConnections(), isEmpty);
+
+        await mgr.saveConnection(
+          'ATLAS',
+          'hermes.example.test',
+          443,
+          'key',
+          gatewayPrefix: '/personal',
+          atlasOwnerEnabled: true,
+        );
+        expect(mgr.getConnections().single.atlasOwnerEnabled, isTrue);
+
+        await mgr.updateDashboardAuth(
+          mgr.getConnections().single.id,
+          gatewayPrefix: '',
+          username: '',
+          password: '',
+        );
+        expect(mgr.getConnections().single.gatewayPrefix, isNull);
+        expect(mgr.getConnections().single.atlasOwnerEnabled, isTrue);
+      },
+    );
+
     test('updateDashboardAuth sets then clears fields', () async {
       final prefs = await SharedPreferences.getInstance();
       final mgr = await ConnectionManager.create(
@@ -906,6 +949,7 @@ void main() {
           dashboardPort: 30433,
           dashboardUsername: 'misha',
           dashboardPassword: 'secret',
+          desktopGatewayUrl: 'https://hermes-desktop.example.lan',
         );
         final id = mgr.getConnections().single.id;
 
@@ -920,6 +964,7 @@ void main() {
           dashboardProxied: false,
           dashboardUsername: '',
           dashboardPassword: '',
+          desktopGatewayUrl: '',
         );
 
         final conn = mgr.getConnections().single;
@@ -935,6 +980,7 @@ void main() {
         expect(conn.dashboardPortOverride, isNull);
         expect(conn.dashboardUsername, isNull);
         expect(conn.dashboardPassword, isNull);
+        expect(conn.desktopGatewayUrl, isNull);
       },
     );
   });
@@ -1039,6 +1085,31 @@ void main() {
       expect(map['gateway_prefix'], '/profile/peter');
       expect(map['dashboard_prefix'], '/dashboard');
       expect(map['dashboard_proxied'], true);
+    });
+
+    test('ATLAS owner mode is explicit and defaults to generic Hermes', () {
+      final generic = SavedConnection(
+        id: '1',
+        label: 'Hermes',
+        host: 'hermes.example.com',
+        port: 443,
+        apiKey: 'key',
+        useHttps: true,
+        gatewayPrefix: '/personal',
+      );
+      expect(generic.atlasOwnerEnabled, isFalse);
+      expect(generic.toMap().containsKey('atlas_owner_enabled'), isFalse);
+
+      final atlas = generic.copyWith(atlasOwnerEnabled: true);
+      expect(atlas.toMap()['atlas_owner_enabled'], isTrue);
+      expect(SavedConnection.fromMap(atlas.toMap()).atlasOwnerEnabled, isTrue);
+      expect(
+        () => SavedConnection.fromMap({
+          ...atlas.toMap(),
+          'gateway_prefix': '/profile/personal',
+        }),
+        throwsFormatException,
+      );
     });
 
     test('SavedConnection preserves an optional Desktop gateway URL', () {
@@ -1878,10 +1949,55 @@ void main() {
 
       try {
         await client.connect();
-        expect(await client.resumeSession('stored-123'), 'runtime-123');
+        expect(
+          await client.resumeSession('stored-123', profile: 'personal'),
+          'runtime-123',
+        );
         final request = await requestSeen.future;
         expect(request['method'], 'session.resume');
-        expect(request['params'], {'session_id': 'stored-123'});
+        expect(request['params'], {
+          'session_id': 'stored-123',
+          'profile': 'personal',
+        });
+      } finally {
+        client.close();
+        await socketSubscription.cancel();
+        await server.close(force: true);
+      }
+    });
+
+    test('session.create carries the selected native Hermes profile', () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      final requestSeen = Completer<Map<String, dynamic>>();
+      final socketSubscription = server
+          .transform(WebSocketTransformer())
+          .listen((socket) {
+            socket.listen((raw) {
+              final request = jsonDecode(raw as String) as Map<String, dynamic>;
+              requestSeen.complete(request);
+              socket.add(
+                jsonEncode({
+                  'jsonrpc': '2.0',
+                  'id': request['id'],
+                  'result': {'session_id': 'runtime-created'},
+                }),
+              );
+            });
+          });
+      final client = WsClient('http://127.0.0.1:${server.port}');
+
+      try {
+        await client.connect();
+        expect(
+          await client.createOrResumeSession('mobile-created', profile: 'pro'),
+          'runtime-created',
+        );
+        final request = await requestSeen.future;
+        expect(request['method'], 'session.create');
+        expect(request['params'], {
+          'session_id': 'mobile-created',
+          'profile': 'pro',
+        });
       } finally {
         client.close();
         await socketSubscription.cancel();
@@ -1932,6 +2048,82 @@ void main() {
         await server.close(force: true);
       }
     });
+
+    test(
+      'uses upstream Hermes Projects list create and set_active contracts',
+      () async {
+        final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+        final requests = <Map<String, dynamic>>[];
+        final socketSubscription = server
+            .transform(WebSocketTransformer())
+            .listen((socket) {
+              socket.listen((raw) {
+                final request =
+                    jsonDecode(raw as String) as Map<String, dynamic>;
+                requests.add(request);
+                socket.add(
+                  jsonEncode({
+                    'jsonrpc': '2.0',
+                    'id': request['id'],
+                    'result': switch (request['method']) {
+                      'projects.list' => {
+                        'projects': <Object>[],
+                        'active_id': null,
+                      },
+                      'projects.create' => {
+                        'project': {
+                          'id': 'p_deadbeef',
+                          'slug': 'mobile-project',
+                          'name': 'Mobile Project',
+                          'description': 'Native project',
+                          'icon': null,
+                          'color': null,
+                          'board_slug': null,
+                          'primary_path': '/workspace/mobile',
+                          'archived': false,
+                          'created_at': 1,
+                          'folders': <Object>[],
+                        },
+                      },
+                      _ => {'active_id': 'p_1234abcd'},
+                    },
+                  }),
+                );
+              });
+            });
+        final client = WsClient('http://127.0.0.1:${server.port}');
+
+        try {
+          await client.connect();
+          final catalog = await client.listProjects();
+          final created = await client.createProject(
+            name: 'Mobile Project',
+            description: 'Native project',
+            primaryPath: '/workspace/mobile',
+            use: true,
+          );
+          final active = await client.setActiveProject('p_1234abcd');
+          expect(catalog['projects'], isEmpty);
+          expect(created['project']['id'], 'p_deadbeef');
+          expect(active['active_id'], 'p_1234abcd');
+          expect(requests[0]['method'], 'projects.list');
+          expect(requests[0]['params'], <String, dynamic>{});
+          expect(requests[1]['method'], 'projects.create');
+          expect(requests[1]['params'], {
+            'name': 'Mobile Project',
+            'description': 'Native project',
+            'primary_path': '/workspace/mobile',
+            'use': true,
+          });
+          expect(requests[2]['method'], 'projects.set_active');
+          expect(requests[2]['params'], {'id': 'p_1234abcd'});
+        } finally {
+          client.close();
+          await socketSubscription.cancel();
+          await server.close(force: true);
+        }
+      },
+    );
 
     test('reads and writes session-scoped reasoning effort', () async {
       final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);

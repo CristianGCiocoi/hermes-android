@@ -186,4 +186,33 @@ void main() {
     expect(find.text('1 delegated task(s) active'), findsOneWidget);
     expect(find.text('Inspect Android transport'), findsOneWidget);
   });
+
+  testWidgets('review notice provides explicit view and dismiss actions', (
+    tester,
+  ) async {
+    var viewed = false;
+    var dismissed = false;
+    const notice = GatewayNotice(
+      kind: GatewayNoticeKind.review,
+      text: 'Self-improvement review completed.',
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: GatewayNoticeCard(
+            notice: notice,
+            onView: () => viewed = true,
+            onDismiss: () async => dismissed = true,
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.byKey(ValueKey('view-notice-${notice.identity}')));
+    await tester.tap(find.byKey(ValueKey('dismiss-notice-${notice.identity}')));
+    await tester.pump();
+
+    expect(viewed, isTrue);
+    expect(dismissed, isTrue);
+  });
 }

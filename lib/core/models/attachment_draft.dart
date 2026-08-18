@@ -22,6 +22,9 @@ class AttachmentDraft {
   String? refText;
   String? error;
   bool? atlasIntakeAccepted;
+  String? temporaryContentId;
+  Map<String, dynamic>? temporaryContentReceipt;
+  Map<String, dynamic>? promotionReceipt;
 
   AttachmentDraft({
     required this.id,
@@ -36,6 +39,9 @@ class AttachmentDraft {
     this.refText,
     this.error,
     this.atlasIntakeAccepted,
+    this.temporaryContentId,
+    this.temporaryContentReceipt,
+    this.promotionReceipt,
   });
 
   bool get isImage => kind == AttachmentDraftKind.image;

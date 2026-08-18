@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:crypto/crypto.dart';
 
+import '../models/gateway_interaction_mode.dart';
 import 'connection_manager.dart';
 import 'gateway_turn_coordinator.dart';
 import 'gateway_turn_journal.dart';
@@ -12,6 +13,10 @@ typedef DesktopAsyncEventCallback =
     void Function(String mobileSessionId, StreamEvent event);
 typedef DesktopConnectionCallback =
     void Function(DesktopConnectionState connectionState);
+typedef DesktopSessionPermissionCallback =
+    void Function(String mobileSessionId, bool effectiveFullControl);
+typedef DesktopInteractionModeCallback =
+    void Function(String mobileSessionId, GatewayInteractionModeState state);
 
 enum DesktopConnectionState {
   disconnected,
@@ -30,10 +35,16 @@ class DesktopGatewayClient {
   final String _baseUrl;
   final DashboardClient _dashboard;
   final String _documentProfile;
+  final String? _atlasProfile;
   WsClient? _ws;
   final Map<String, String> _gatewaySessionIds = {};
+  final Map<String, bool> _effectiveFullControl = {};
+  final Map<String, GatewayInteractionModeState> _interactionModeStates = {};
+  GatewayInteractionModeCapability? _interactionModeCapability;
   DesktopAsyncEventCallback? _asyncEventListener;
   DesktopConnectionCallback? _connectionListener;
+  DesktopSessionPermissionCallback? _sessionPermissionListener;
+  DesktopInteractionModeCallback? _interactionModeListener;
   GatewayTurnCoordinatorRegistry? _turnCoordinatorRegistry;
 
   static const _asyncEventTypes = {
@@ -47,6 +58,7 @@ class DesktopGatewayClient {
     'subagent.tool',
     'subagent.progress',
     'subagent.complete',
+    'session.info',
   };
 
   DesktopGatewayClient._({
@@ -54,6 +66,7 @@ class DesktopGatewayClient {
     required this._baseUrl,
     required this._dashboard,
     required this._documentProfile,
+    required this._atlasProfile,
   });
 
   factory DesktopGatewayClient.fromConnection(SavedConnection connection) {
@@ -79,6 +92,12 @@ class DesktopGatewayClient {
       '${baseUri.scheme}://${baseUri.host}:$port',
       pathPrefix,
     );
+    final requestedPrefix = connection.gatewayPrefix?.trim() ?? '';
+    final atlasProfile = connection.atlasOwnerEnabled
+        ? (requestedPrefix.isEmpty
+              ? 'organizator'
+              : requestedPrefix.substring(1))
+        : null;
     return DesktopGatewayClient._(
       connectionId: connection.id,
       baseUrl: baseUrl,
@@ -91,20 +110,28 @@ class DesktopGatewayClient {
         password: connection.dashboardPassword,
       ),
       documentProfile: documentIntakeProfileForConnection(connection),
+      atlasProfile: atlasProfile,
     );
   }
 
   Future<_DesktopGatewaySession> _connect(String mobileSessionId) async {
-    final existing = _ws;
-    if (existing != null && existing.isConnected) {
-      final mappedSessionId = _gatewaySessionIds[mobileSessionId];
-      if (mappedSessionId != null) {
-        return _DesktopGatewaySession(existing, mappedSessionId);
-      }
-      final gatewaySessionId = await _resumeOrCreate(existing, mobileSessionId);
-      _gatewaySessionIds[mobileSessionId] = gatewaySessionId;
-      return _DesktopGatewaySession(existing, gatewaySessionId);
+    final client = await _connectSocket();
+    final mappedSessionId = _gatewaySessionIds[mobileSessionId];
+    if (mappedSessionId != null) {
+      return _DesktopGatewaySession(client, mappedSessionId);
     }
+    final opened = await _resumeOrCreate(client, mobileSessionId);
+    _gatewaySessionIds[mobileSessionId] = opened.sessionId;
+    final effective = opened.effectiveFullControl;
+    if (effective != null) {
+      _recordEffectiveFullControl(mobileSessionId, effective);
+    }
+    return _DesktopGatewaySession(client, opened.sessionId);
+  }
+
+  Future<WsClient> _connectSocket() async {
+    final existing = _ws;
+    if (existing != null && existing.isConnected) return existing;
 
     _connectionListener?.call(
       existing == null
@@ -113,6 +140,9 @@ class DesktopGatewayClient {
     );
     existing?.close();
     _gatewaySessionIds.clear();
+    _effectiveFullControl.clear();
+    _interactionModeStates.clear();
+    _interactionModeCapability = null;
     final ticket = await _dashboard.mintWebSocketTicket();
     final client = WsClient(_baseUrl, ticket: ticket);
     _installAsyncEventBridge(client);
@@ -121,15 +151,16 @@ class DesktopGatewayClient {
         _connectionListener?.call(DesktopConnectionState.connected);
       } else if (identical(_ws, client)) {
         _gatewaySessionIds.clear();
+        _effectiveFullControl.clear();
+        _interactionModeStates.clear();
+        _interactionModeCapability = null;
         _connectionListener?.call(DesktopConnectionState.disconnected);
       }
     };
     try {
       await client.connect();
       _ws = client;
-      final gatewaySessionId = await _resumeOrCreate(client, mobileSessionId);
-      _gatewaySessionIds[mobileSessionId] = gatewaySessionId;
-      return _DesktopGatewaySession(client, gatewaySessionId);
+      return client;
     } catch (_) {
       client.close();
       if (identical(_ws, client)) _ws = null;
@@ -138,12 +169,15 @@ class DesktopGatewayClient {
     }
   }
 
-  Future<String> _resumeOrCreate(
+  Future<GatewaySessionOpenResult> _resumeOrCreate(
     WsClient client,
     String mobileSessionId,
   ) async {
     try {
-      return await client.resumeSession(mobileSessionId);
+      return await client.resumeSessionWithInfo(
+        mobileSessionId,
+        profile: _atlasProfile,
+      );
     } on JsonRpcError catch (error) {
       if (error.code != 4007 &&
           !error.message.toLowerCase().contains('session not found')) {
@@ -152,12 +186,16 @@ class DesktopGatewayClient {
       // New mobile chats do not exist in Hermes yet. Create them with the
       // mobile-generated ID so REST history and the Desktop runtime share one
       // stable identity. Existing sessions always take the resume path.
-      return client.createOrResumeSession(mobileSessionId);
+      return client.createOrResumeSessionWithInfo(
+        mobileSessionId,
+        profile: _atlasProfile,
+      );
     }
   }
 
-  Future<void> ensureSession(String sessionId) async {
+  Future<bool?> ensureSession(String sessionId) async {
     await _connect(sessionId);
+    return _effectiveFullControl[sessionId];
   }
 
   /// Creates the source-only recovery-v2 registry without changing any legacy
@@ -180,18 +218,172 @@ class DesktopGatewayClient {
     _connectionListener = listener;
   }
 
+  void setSessionPermissionListener(
+    DesktopSessionPermissionCallback? listener,
+  ) {
+    _sessionPermissionListener = listener;
+  }
+
+  void setInteractionModeListener(DesktopInteractionModeCallback? listener) {
+    _interactionModeListener = listener;
+  }
+
+  Future<GatewayInteractionModeState> getInteractionModeState({
+    required String sessionId,
+  }) async {
+    final gateway = await _connect(sessionId);
+    final capability = await _interactionCapabilityFor(gateway.client);
+    if (!capability.supported) {
+      const state = GatewayInteractionModeState.standardOnly();
+      _recordInteractionMode(sessionId, state);
+      return state;
+    }
+    final receipt = await gateway.client.getInteractionMode(
+      sessionId: gateway.sessionId,
+    );
+    final state = GatewayInteractionModeState(
+      supported: true,
+      mode: receipt.effectiveMode,
+      revision: receipt.revision,
+    );
+    _recordInteractionMode(sessionId, state);
+    return state;
+  }
+
+  Future<GatewayInteractionModeState> setInteractionMode({
+    required String sessionId,
+    required GatewayInteractionMode mode,
+    required int expectedRevision,
+  }) async {
+    final gateway = await _connect(sessionId);
+    final capability = await _interactionCapabilityFor(gateway.client);
+    if (!capability.supported) {
+      const state = GatewayInteractionModeState.standardOnly();
+      _recordInteractionMode(sessionId, state);
+      return state;
+    }
+    final current = _interactionModeStates[sessionId];
+    if (current != null &&
+        current.supported &&
+        current.mode == mode &&
+        current.revision == expectedRevision) {
+      return current;
+    }
+
+    final readback = Completer<GatewayInteractionModeState>();
+    void listener(StreamEvent event) {
+      if (event.type != 'session.info') return;
+      final state = GatewayInteractionModeState.fromSessionInfo(event.data);
+      if (state != null && !readback.isCompleted) readback.complete(state);
+    }
+
+    gateway.client.addSessionEventListener(gateway.sessionId, listener);
+    try {
+      final receipt = await gateway.client.setInteractionMode(
+        sessionId: gateway.sessionId,
+        mode: mode,
+        expectedRevision: expectedRevision,
+      );
+      if (receipt.revision != expectedRevision + 1) {
+        throw JsonRpcError(
+          'interaction_mode.set',
+          'Gateway did not advance the interaction mode revision',
+        );
+      }
+      final reported = await readback.future.timeout(
+        const Duration(seconds: 5),
+        onTimeout: () => throw JsonRpcError(
+          'session.info',
+          'Gateway did not confirm the effective interaction mode',
+        ),
+      );
+      if (reported.mode != receipt.effectiveMode ||
+          reported.revision != receipt.revision) {
+        throw JsonRpcError(
+          'session.info',
+          'Gateway interaction mode readback did not match its receipt',
+        );
+      }
+      _recordInteractionMode(sessionId, reported);
+      return reported;
+    } finally {
+      gateway.client.removeSessionEventListener(gateway.sessionId, listener);
+    }
+  }
+
+  Future<GatewayInteractionModeCapability> _interactionCapabilityFor(
+    WsClient client,
+  ) async {
+    final cached = _interactionModeCapability;
+    if (cached != null) return cached;
+    final capability = GatewayInteractionModeCapability.fromGatewayReady(
+      await client.waitForGatewayReady(),
+    );
+    _interactionModeCapability = capability;
+    return capability;
+  }
+
   Future<RemoteFileAttachment> attachFile({
     required String sessionId,
     required String name,
     required String dataUrl,
+    required String clientAttachmentId,
+    required String mediaType,
+    String? projectId,
   }) async {
     final gateway = await _connect(sessionId);
+    final atlasProfile = _atlasProfile;
+    if (atlasProfile != null) {
+      final ready = await gateway.client.waitForGatewayReady();
+      final capability = AtlasTemporaryAttachmentCapability.fromGatewayReady(
+        ready,
+      );
+      if (!capability.supported) {
+        throw StateError(
+          'This Gateway does not advertise ATLAS Temporary Content.',
+        );
+      }
+    }
     return gateway.client.attachFile(
       sessionId: gateway.sessionId,
       name: name,
       dataUrl: dataUrl,
       sourceChannel: 'hermes_mobile',
       sourceProfile: _documentProfile,
+      atlasConversationId: atlasProfile == null ? null : sessionId,
+      atlasProfileId: atlasProfile,
+      atlasIdempotencyKey: atlasProfile == null
+          ? null
+          : 'attach-$clientAttachmentId',
+      atlasMimeType: atlasProfile == null ? null : mediaType,
+      atlasProjectId: atlasProfile == null ? null : projectId,
+    );
+  }
+
+  Future<Map<String, dynamic>> promoteTemporaryAttachment({
+    required String sessionId,
+    required String temporaryContentId,
+    required String clientAttachmentId,
+  }) async {
+    final profile = _atlasProfile;
+    if (profile == null) {
+      throw StateError('ATLAS Temporary Content is not enabled.');
+    }
+    final gateway = await _connect(sessionId);
+    final capability = AtlasTemporaryAttachmentCapability.fromGatewayReady(
+      await gateway.client.waitForGatewayReady(),
+    );
+    if (!capability.supported) {
+      throw StateError(
+        'This Gateway does not advertise ATLAS Temporary Content.',
+      );
+    }
+    return gateway.client.promoteFile(
+      sessionId: gateway.sessionId,
+      temporaryContentId: temporaryContentId,
+      conversationId: sessionId,
+      profileId: profile,
+      idempotencyKey: 'promote-$clientAttachmentId',
     );
   }
 
@@ -231,8 +423,34 @@ class DesktopGatewayClient {
         mobileSessionId = _gatewaySessionIds.keys.single;
       }
       if (mobileSessionId == null) return;
+      if (event.type == 'session.info') {
+        final yolo = event.data['yolo'];
+        if (yolo is bool) {
+          _recordEffectiveFullControl(mobileSessionId, yolo);
+        }
+        final interaction = GatewayInteractionModeState.fromSessionInfo(
+          event.data,
+        );
+        if (interaction != null) {
+          _recordInteractionMode(mobileSessionId, interaction);
+        }
+        return;
+      }
       _asyncEventListener?.call(mobileSessionId, event);
     };
+  }
+
+  void _recordEffectiveFullControl(String mobileSessionId, bool enabled) {
+    _effectiveFullControl[mobileSessionId] = enabled;
+    _sessionPermissionListener?.call(mobileSessionId, enabled);
+  }
+
+  void _recordInteractionMode(
+    String mobileSessionId,
+    GatewayInteractionModeState state,
+  ) {
+    _interactionModeStates[mobileSessionId] = state;
+    _interactionModeListener?.call(mobileSessionId, state);
   }
 
   /// Interrupts the active turn in the Desktop gateway runtime.
@@ -329,6 +547,41 @@ class DesktopGatewayClient {
     );
   }
 
+  /// Changes approval bypass for one mapped chat and waits for the gateway's
+  /// authoritative effective state. A global server policy can keep effective
+  /// Full control enabled even after the per-session override is disabled.
+  Future<bool> setSessionFullControl({
+    required String sessionId,
+    required bool enabled,
+  }) async {
+    final gateway = await _connect(sessionId);
+    final effective = Completer<bool>();
+    void listener(StreamEvent event) {
+      if (event.type != 'session.info') return;
+      final yolo = event.data['yolo'];
+      if (yolo is bool && !effective.isCompleted) effective.complete(yolo);
+    }
+
+    gateway.client.addSessionEventListener(gateway.sessionId, listener);
+    try {
+      await gateway.client.setSessionFullControl(
+        sessionId: gateway.sessionId,
+        enabled: enabled,
+      );
+      final reported = await effective.future.timeout(
+        const Duration(seconds: 5),
+        onTimeout: () => throw JsonRpcError(
+          'session.info',
+          'Gateway did not confirm the effective permission level',
+        ),
+      );
+      _recordEffectiveFullControl(sessionId, reported);
+      return reported;
+    } finally {
+      gateway.client.removeSessionEventListener(gateway.sessionId, listener);
+    }
+  }
+
   Future<void> renameSession({
     required String sessionId,
     required String title,
@@ -345,12 +598,48 @@ class DesktopGatewayClient {
     return gateway.client.branchSession(gateway.sessionId, name: name);
   }
 
+  /// Reads the upstream Hermes per-profile Projects store through its native
+  /// JSON-RPC surface. No ATLAS service or identity is involved.
+  Future<Map<String, dynamic>> listProjects() async {
+    final client = await _connectSocket();
+    return client.listProjects();
+  }
+
+  /// Creates one upstream Hermes Project in the current profile. ATLAS
+  /// identity and ProjectProjection are deliberately not created by mobile.
+  Future<Map<String, dynamic>> createProject({
+    required String name,
+    String? description,
+    String? primaryPath,
+    required bool use,
+  }) async {
+    final client = await _connectSocket();
+    return client.createProject(
+      name: name,
+      description: description,
+      primaryPath: primaryPath,
+      use: use,
+    );
+  }
+
+  /// Selects an existing upstream Hermes runtime Project. The identifier is
+  /// Hermes-owned projection metadata, never canonical ATLAS Project identity.
+  Future<Map<String, dynamic>> setActiveProject(String hermesProjectId) async {
+    final client = await _connectSocket();
+    return client.setActiveProject(hermesProjectId);
+  }
+
   void close() {
     _asyncEventListener = null;
     _connectionListener = null;
+    _sessionPermissionListener = null;
+    _interactionModeListener = null;
     _ws?.close();
     _ws = null;
     _gatewaySessionIds.clear();
+    _effectiveFullControl.clear();
+    _interactionModeStates.clear();
+    _interactionModeCapability = null;
     final turnCoordinatorRegistry = _turnCoordinatorRegistry;
     _turnCoordinatorRegistry = null;
     if (turnCoordinatorRegistry != null) {

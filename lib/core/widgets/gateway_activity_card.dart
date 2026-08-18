@@ -4,13 +4,8 @@ import '../models/gateway_activity.dart';
 
 class GatewayActivityCard extends StatelessWidget {
   final List<GatewayToolActivity> activities;
-  final bool verbose;
 
-  const GatewayActivityCard({
-    required this.activities,
-    this.verbose = false,
-    super.key,
-  });
+  const GatewayActivityCard({required this.activities, super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -29,7 +24,7 @@ class GatewayActivityCard extends StatelessWidget {
         key: PageStorageKey<String>(
           'gateway-activity-${activities.map((item) => item.toolId ?? item.name).join('-')}',
         ),
-        initiallyExpanded: active || verbose,
+        initiallyExpanded: false,
         leading: active
             ? const SizedBox.square(
                 dimension: 22,

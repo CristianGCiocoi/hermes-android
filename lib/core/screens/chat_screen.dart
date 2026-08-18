@@ -17,6 +17,7 @@ import '../services/connection_manager.dart';
 import '../services/attachment_draft_service.dart';
 import '../services/chat_model_override_store.dart';
 import '../services/desktop_gateway_client.dart';
+import '../services/gateway_activity_center_controller.dart';
 import '../services/gateway_turn_application_controller.dart';
 import '../services/gateway_turn_coordinator.dart';
 import '../services/gateway_turn_recovery.dart';
@@ -28,12 +29,14 @@ import '../models/gateway_activity.dart';
 import '../models/gateway_approval.dart';
 import '../models/gateway_clarify.dart';
 import '../models/gateway_insight.dart';
+import '../models/gateway_interaction_mode.dart';
 import '../models/gateway_sensitive_prompt.dart';
 import '../models/gateway_turn_contract.dart';
 import '../utils/chat_history_scroll.dart';
 import '../utils/message_content.dart';
 import '../utils/responsive.dart';
 import '../widgets/gateway_activity_card.dart';
+import '../widgets/gateway_activity_center_sheet.dart';
 import '../widgets/attachment_draft_tile.dart';
 import '../widgets/chat_end_affordance.dart';
 import '../widgets/gateway_approval_dialog.dart';
@@ -41,11 +44,6 @@ import '../widgets/gateway_clarify_dialog.dart';
 import '../widgets/gateway_insight_card.dart';
 import '../widgets/gateway_sensitive_prompt_dialog.dart';
 import '../widgets/voice_composer_controls.dart';
-
-/// These colors remain identical in light and dark themes. Their 8.15:1
-/// contrast ratio keeps normal user-message text above WCAG AA.
-const hermesUserMessageBubbleBackground = Color(0xFFD4AF37);
-const hermesUserMessageForeground = Color(0xFF1C1B1F);
 
 class _ModelChoice {
   final String provider;
@@ -74,15 +72,11 @@ const _reasoningEffortLabels = <String, String>{
 
 class _GatewayReasoningDisplay {
   final String text;
-  final bool initiallyExpanded;
 
-  const _GatewayReasoningDisplay(this.text, this.initiallyExpanded);
+  const _GatewayReasoningDisplay(this.text);
 }
 
 enum _ResponseTransport { none, rest, desktop }
-
-const _legacyTransportNotice =
-    'Background recovery unavailable — legacy transport';
 
 @visibleForTesting
 typedef TestRemotePromptSubmit =
@@ -97,6 +91,13 @@ typedef TestRemoteAttachmentUpload =
     Future<AttachmentUploadReceipt> Function({
       required AttachmentDraft draft,
       required String dataUrl,
+    });
+
+@visibleForTesting
+typedef TestRemoteTemporaryPromote =
+    Future<Map<String, dynamic>> Function({
+      required String temporaryContentId,
+      required String clientAttachmentId,
     });
 
 class _PendingSensitivePrompt {
@@ -137,6 +138,12 @@ class ChatScreen extends StatefulWidget {
   final List<AttachmentDraft> testInitialAttachmentDrafts;
 
   @visibleForTesting
+  final List<AttachmentDraft> testInitialPendingPromotions;
+
+  @visibleForTesting
+  final TestRemoteTemporaryPromote? testRemoteTemporaryPromote;
+
+  @visibleForTesting
   final VoiceComposerAdapter? testVoiceComposerAdapter;
 
   const ChatScreen({
@@ -149,6 +156,8 @@ class ChatScreen extends StatefulWidget {
     this.testRemotePromptSubmit,
     this.testRemoteAttachmentUpload,
     this.testInitialAttachmentDrafts = const [],
+    this.testInitialPendingPromotions = const [],
+    this.testRemoteTemporaryPromote,
     this.testVoiceComposerAdapter,
     super.key,
   });
@@ -159,11 +168,7 @@ class ChatScreen extends StatefulWidget {
 
 class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   List<Map<String, dynamic>> _messages = [];
-  final List<GatewayToolActivity> _toolActivities = [];
-  final List<GatewaySubagentActivity> _subagentActivities = [];
-  final Map<String, GatewayNotification> _gatewayNotifications = {};
-  final Map<String, Timer> _notificationTimers = {};
-  late final List<GatewayNotice> _gatewayNotices;
+  late final GatewayActivityCenterController _activityCenter;
   bool _loading = true;
   String? _error;
   late final ApiClient _client;
@@ -181,19 +186,23 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   final _textController = TextEditingController();
   final _imagePicker = ImagePicker();
   final List<AttachmentDraft> _attachmentDrafts = [];
+  final List<AttachmentDraft> _pendingPromotions = [];
+  bool _promotingTemporaryAttachments = false;
   String? _sessionModel;
   String? _sessionProvider;
   String? _sessionReasoningEffort;
   bool _sessionModelOverride = false;
   bool _loadingModelOptions = false;
   bool _changingModel = false;
+  bool? _effectiveFullControl;
+  bool _changingPermission = false;
+  GatewayInteractionModeState? _interactionModeState;
+  bool _changingInteractionMode = false;
   bool _sending = false;
   bool _streaming = false;
-  GatewayTurnStatus? _gatewayTurnStatus;
   _ResponseTransport _activeResponseTransport = _ResponseTransport.none;
   String? _activeClientTurnId;
   bool _recoveringTurn = false;
-  bool _legacyTransportFallback = false;
   int _responseGeneration = 0;
   bool _approvalDialogOpen = false;
   final List<_PendingSensitivePrompt> _sensitivePromptQueue = [];
@@ -226,12 +235,25 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   static const _initialEndFrameBudget = 12;
   static const _requiredStableEndFrames = 2;
   static const _stableExtentTolerance = 0.5;
-  static final Map<String, List<GatewayNotice>> _savedGatewayNotices = {};
+
+  List<GatewayToolActivity> get _toolActivities => _activityCenter.tools;
+  List<GatewaySubagentActivity> get _subagentActivities =>
+      _activityCenter.subagents;
+  GatewayTurnStatus? get _gatewayTurnStatus => _activityCenter.turnStatus;
+  set _gatewayTurnStatus(GatewayTurnStatus? value) =>
+      _activityCenter.setTurnStatus(value);
+  bool get _legacyTransportFallback => _activityCenter.legacyTransportFallback;
+  set _legacyTransportFallback(bool value) =>
+      _activityCenter.setLegacyTransportFallback(value);
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _activityCenter = GatewayActivityCenterController(
+      sessionIdentity: _gatewayNoticeIdentity,
+    )..addListener(_onActivityCenterChanged);
+    unawaited(_activityCenter.initialize());
     _client =
         widget.testApiClient ??
         ApiClient(
@@ -251,9 +273,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           widget.testVoiceComposerAdapter ?? SpeechToTextVoiceComposerAdapter(),
     )..addListener(_onVoiceComposerChanged);
     _attachmentDrafts.addAll(widget.testInitialAttachmentDrafts);
-    _gatewayNotices = List<GatewayNotice>.from(
-      _savedGatewayNotices[_gatewayNoticeIdentity] ?? const [],
-    );
+    _pendingPromotions.addAll(widget.testInitialPendingPromotions);
     _chatModelStore = ChatModelOverrideStore.open();
     _sessionModelRestore = _restoreSessionModelOverride();
     if (widget.connection.desktopGatewayUrl?.trim().isNotEmpty == true) {
@@ -263,7 +283,22 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         );
         _desktopGateway!.setAsyncEventListener(_handleDesktopAsyncEvent);
         _desktopGateway!.setConnectionListener((state) {
-          if (mounted) setState(() => _desktopConnectionState = state);
+          if (!mounted) return;
+          setState(() {
+            _desktopConnectionState = state;
+            if (state != DesktopConnectionState.connected) {
+              _effectiveFullControl = null;
+              _interactionModeState = null;
+            }
+          });
+        });
+        _desktopGateway!.setSessionPermissionListener((sessionId, enabled) {
+          if (!mounted || sessionId != widget.session.id) return;
+          setState(() => _effectiveFullControl = enabled);
+        });
+        _desktopGateway!.setInteractionModeListener((sessionId, state) {
+          if (!mounted || sessionId != widget.session.id) return;
+          setState(() => _interactionModeState = state);
         });
         unawaited(_ensureDesktopSession());
       } on ArgumentError {
@@ -315,17 +350,14 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _savedGatewayNotices[_gatewayNoticeIdentity] = List.unmodifiable(
-      _gatewayNotices,
-    );
+    _activityCenter
+      ..removeListener(_onActivityCenterChanged)
+      ..dispose();
     _voiceComposer
       ..removeListener(_onVoiceComposerChanged)
       ..dispose();
     if (widget.testVoiceComposerAdapter == null) {
       _flutterTts.stop();
-    }
-    for (final timer in _notificationTimers.values) {
-      timer.cancel();
     }
     _client.close();
     unawaited(
@@ -334,6 +366,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       ),
     );
     _desktopGateway?.setAsyncEventListener(null);
+    _desktopGateway?.setSessionPermissionListener(null);
+    _desktopGateway?.setInteractionModeListener(null);
     _desktopGateway?.close();
     _textController.dispose();
     _scrollController.removeListener(_onScroll);
@@ -351,6 +385,10 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     }
   }
 
+  void _onActivityCenterChanged() {
+    if (mounted) setState(() {});
+  }
+
   Future<void> _initializeChat() async {
     await _fetchMessages();
     if (!mounted) return;
@@ -361,7 +399,16 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     final gateway = _desktopGateway;
     if (gateway == null) return;
     try {
-      await gateway.ensureSession(widget.session.id);
+      final effective = await gateway.ensureSession(widget.session.id);
+      final interaction = await gateway.getInteractionModeState(
+        sessionId: widget.session.id,
+      );
+      if (mounted) {
+        setState(() {
+          if (effective != null) _effectiveFullControl = effective;
+          _interactionModeState = interaction;
+        });
+      }
     } catch (_) {
       // The composer remains available. The next send retries with a fresh
       // single-use ticket and surfaces an actionable error if it still fails.
@@ -401,6 +448,14 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         subject: widget.session.title,
         text: buffer.toString().trim(),
       ),
+    );
+  }
+
+  Future<void> _shareMessage(String text) async {
+    final message = text.trim();
+    if (message.isEmpty) return;
+    await SharePlus.instance.share(
+      ShareParams(subject: widget.session.title, text: message),
     );
   }
 
@@ -539,8 +594,14 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         (notification is OverscrollNotification &&
             notification.dragDetails != null);
     if (isDirectUserScroll) {
+      final scrollDelta = switch (notification) {
+        ScrollUpdateNotification() => notification.scrollDelta ?? 0,
+        OverscrollNotification() => notification.overscroll,
+        _ => 0.0,
+      };
       _scrollCoordinator.updateFromUserScroll(
         isNearEnd: _isNearEnd(notification.metrics),
+        movedAwayFromEnd: scrollDelta < 0,
       );
     }
     return false;
@@ -554,6 +615,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   }
 
   void _goToEnd() {
+    _scrollCoordinator.resumeStreamingFollow();
     _applyScrollTarget(const ChatScrollTarget.end());
   }
 
@@ -828,7 +890,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   }
 
   void _extractToolMessages(List<Map<String, dynamic>> messages) {
-    _toolActivities.clear();
+    final activities = <GatewayToolActivity>[];
     for (final msg in messages) {
       if (!isToolResultMessage(msg)) continue;
 
@@ -847,7 +909,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       }
       if (toolName.isEmpty) toolName = 'tool';
 
-      _toolActivities.add(
+      activities.add(
         GatewayToolActivity(
           toolId: toolCallId.isEmpty ? null : toolCallId,
           name: toolName,
@@ -855,6 +917,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         ),
       );
     }
+    _activityCenter.replaceTools(activities);
   }
 
   Future<void> _showAttachmentPicker() async {
@@ -1093,11 +1156,133 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       sessionId: widget.session.id,
       name: draft.name,
       dataUrl: dataUrl,
+      clientAttachmentId: draft.id,
+      mediaType: draft.mediaType,
     );
     return AttachmentUploadReceipt(
       refText: attachment.refText,
       atlasIntakeAccepted: attachment.atlasIntakeAccepted,
+      atlasTemporaryReceipt: attachment.atlasTemporaryReceipt,
     );
+  }
+
+  void _recordAttachmentActivity(AttachmentDraft draft) {
+    final phase = switch (draft.status) {
+      AttachmentDraftStatus.uploading => GatewayToolActivityPhase.progress,
+      AttachmentDraftStatus.attached => GatewayToolActivityPhase.completed,
+      AttachmentDraftStatus.failed => GatewayToolActivityPhase.failed,
+      AttachmentDraftStatus.ready => GatewayToolActivityPhase.running,
+    };
+    final detail = switch (draft.status) {
+      AttachmentDraftStatus.uploading => 'Uploading ${draft.name}',
+      AttachmentDraftStatus.attached =>
+        draft.temporaryContentId == null
+            ? 'Attachment receipt verified • ${draft.name}'
+            : 'Temporary Content receipt verified • ${draft.name}',
+      AttachmentDraftStatus.failed => 'Upload failed • ${draft.name}',
+      AttachmentDraftStatus.ready => 'Ready • ${draft.name}',
+    };
+    _activityCenter.upsertTool(
+      GatewayToolActivity(
+        toolId: 'attachment-${draft.id}',
+        name: draft.isImage ? 'attach_image' : 'attach_file',
+        phase: phase,
+        detail: detail,
+      ),
+    );
+  }
+
+  void _recordPromotionActivity(
+    AttachmentDraft draft,
+    GatewayToolActivityPhase phase,
+  ) {
+    _activityCenter.upsertTool(
+      GatewayToolActivity(
+        toolId: 'promote-${draft.id}',
+        name: 'promote_document',
+        phase: phase,
+        detail: switch (phase) {
+          GatewayToolActivityPhase.completed =>
+            'Promotion receipt verified • ${draft.name}',
+          GatewayToolActivityPhase.failed => 'Promotion failed • ${draft.name}',
+          _ => 'Promoting ${draft.name}',
+        },
+      ),
+    );
+  }
+
+  void _trackTemporaryPromotion(List<AttachmentDraft> attachments) {
+    final temporary = attachments
+        .where(
+          (draft) =>
+              draft.temporaryContentId != null &&
+              draft.promotionReceipt == null &&
+              !_pendingPromotions.any((pending) => pending.id == draft.id),
+        )
+        .toList(growable: false);
+    if (temporary.isEmpty || !mounted) return;
+    setState(() => _pendingPromotions.addAll(temporary));
+  }
+
+  Future<void> _promoteTemporaryAttachments(
+    DesktopGatewayClient? desktopGateway,
+    List<AttachmentDraft> attachments,
+  ) async {
+    if (_promotingTemporaryAttachments ||
+        (desktopGateway == null && widget.testRemoteTemporaryPromote == null)) {
+      return;
+    }
+    setState(() => _promotingTemporaryAttachments = true);
+    AttachmentDraft? activePromotion;
+    try {
+      for (final draft in attachments) {
+        final temporaryContentId = draft.temporaryContentId;
+        if (temporaryContentId == null || draft.promotionReceipt != null) {
+          continue;
+        }
+        activePromotion = draft;
+        _recordPromotionActivity(draft, GatewayToolActivityPhase.running);
+        draft.promotionReceipt = widget.testRemoteTemporaryPromote != null
+            ? await widget.testRemoteTemporaryPromote!(
+                temporaryContentId: temporaryContentId,
+                clientAttachmentId: draft.id,
+              )
+            : await desktopGateway!.promoteTemporaryAttachment(
+                sessionId: widget.session.id,
+                temporaryContentId: temporaryContentId,
+                clientAttachmentId: draft.id,
+              );
+        _recordPromotionActivity(draft, GatewayToolActivityPhase.completed);
+        activePromotion = null;
+      }
+      if (!mounted) return;
+      setState(
+        () => _pendingPromotions.removeWhere(
+          (draft) => draft.promotionReceipt != null,
+        ),
+      );
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Document promotion completed.'),
+          backgroundColor: Colors.green,
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      if (activePromotion case final draft?) {
+        _recordPromotionActivity(draft, GatewayToolActivityPhase.failed);
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Document promotion failed: $error'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _promotingTemporaryAttachments = false);
+      }
+    }
   }
 
   Future<void> _retryAttachment(AttachmentDraft draft) async {
@@ -1115,8 +1300,11 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         draft: draft,
         upload: ({required draft, required dataUrl}) =>
             _uploadAttachmentDraft(desktopGateway, draft, dataUrl),
-        onChanged: (_) {
-          if (mounted) setState(() {});
+        onChanged: (draft) {
+          if (mounted) {
+            _recordAttachmentActivity(draft);
+            setState(() {});
+          }
         },
       );
       if (!mounted) return;
@@ -1307,6 +1495,221 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     }
   }
 
+  Future<void> _showInteractionModeSelector() async {
+    final state = _interactionModeState;
+    final desktopGateway = _desktopGateway;
+    if (desktopGateway == null || state == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Hermes interaction mode is still loading.'),
+        ),
+      );
+      return;
+    }
+    if (!state.supported) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'This Gateway supports Standard mode only. Interview and Grill require an upgraded Hermes Gateway.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    final selection = await showModalBottomSheet<GatewayInteractionMode>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const ListTile(
+              leading: Icon(Icons.forum_outlined),
+              title: Text('Conversation style'),
+              subtitle: Text(
+                'Interview and Grill ask one question at a time through the Gateway.',
+              ),
+            ),
+            for (final mode in GatewayInteractionMode.values)
+              ListTile(
+                key: Key('interaction-mode-${mode.wireValue}'),
+                leading: Icon(
+                  state.mode == mode
+                      ? Icons.check_circle
+                      : switch (mode) {
+                          GatewayInteractionMode.standard =>
+                            Icons.chat_bubble_outline,
+                          GatewayInteractionMode.interview =>
+                            Icons.question_answer_outlined,
+                          GatewayInteractionMode.grill =>
+                            Icons.fact_check_outlined,
+                        },
+                ),
+                title: Text(mode.label),
+                subtitle: Text(mode.description),
+                onTap: () => Navigator.pop(sheetContext, mode),
+              ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+    if (selection == null || selection == state.mode || !mounted) return;
+    await _setInteractionMode(selection);
+  }
+
+  Future<void> _setInteractionMode(GatewayInteractionMode mode) async {
+    final gateway = _desktopGateway;
+    final current = _interactionModeState;
+    if (gateway == null ||
+        current == null ||
+        !current.supported ||
+        _changingInteractionMode) {
+      return;
+    }
+    setState(() => _changingInteractionMode = true);
+    try {
+      final state = await gateway.setInteractionMode(
+        sessionId: widget.session.id,
+        mode: mode,
+        expectedRevision: current.revision,
+      );
+      if (!mounted) return;
+      setState(() => _interactionModeState = state);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('${state.mode.label} mode is active for this chat.'),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Conversation style was not changed: $error')),
+      );
+      unawaited(_ensureDesktopSession());
+    } finally {
+      if (mounted) setState(() => _changingInteractionMode = false);
+    }
+  }
+
+  Future<void> _showPermissionSelector() async {
+    final desktopGateway = _desktopGateway;
+    if (desktopGateway == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Session permissions require a configured Desktop Gateway.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    final selection = await showModalBottomSheet<bool>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const ListTile(
+              leading: Icon(Icons.admin_panel_settings_outlined),
+              title: Text('Permissions for this chat'),
+              subtitle: Text(
+                'This changes only the current live session. It never changes the server-wide policy.',
+              ),
+            ),
+            ListTile(
+              key: const Key('permission-standard-option'),
+              leading: Icon(
+                _effectiveFullControl == false
+                    ? Icons.check_circle
+                    : Icons.verified_user_outlined,
+              ),
+              title: const Text('Standard (server policy)'),
+              subtitle: const Text(
+                'Hermes asks for approval when the server policy requires it.',
+              ),
+              onTap: () => Navigator.pop(sheetContext, false),
+            ),
+            ListTile(
+              key: const Key('permission-full-control-option'),
+              leading: Icon(
+                _effectiveFullControl == true
+                    ? Icons.check_circle
+                    : Icons.bolt_outlined,
+              ),
+              title: const Text('Full control'),
+              subtitle: const Text(
+                'Bypasses approval prompts for this live session. High risk.',
+              ),
+              onTap: () => Navigator.pop(sheetContext, true),
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+    if (selection == null || !mounted) return;
+
+    if (selection && _effectiveFullControl != true) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Enable Full control?'),
+          content: const Text(
+            'Hermes tools and commands may run without approval prompts in this chat. '
+            'Use it only when you trust the task and its inputs. The setting is limited to this live session.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              key: const Key('confirm-full-control'),
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text('Enable Full control'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true || !mounted) return;
+    }
+
+    await _setSessionFullControl(selection);
+  }
+
+  Future<void> _setSessionFullControl(bool enabled) async {
+    final desktopGateway = _desktopGateway;
+    if (desktopGateway == null || _changingPermission) return;
+    setState(() => _changingPermission = true);
+    try {
+      final effective = await desktopGateway.setSessionFullControl(
+        sessionId: widget.session.id,
+        enabled: enabled,
+      );
+      if (!mounted) return;
+      setState(() => _effectiveFullControl = effective);
+      final message = !enabled && effective
+          ? 'The session override is off, but the server policy still reports Full control.'
+          : effective
+          ? 'Full control is enabled only for this live session.'
+          : 'Standard permissions now follow the server policy.';
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(message)));
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Permission level was not changed: $error')),
+      );
+    } finally {
+      if (mounted) setState(() => _changingPermission = false);
+    }
+  }
+
   List<_ModelChoice> _parseModelChoices(Map<String, dynamic> options) {
     final providers = options['providers'];
     if (providers is! List) return const [];
@@ -1394,7 +1797,11 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
 
     // A remote-gateway profile uses one transport for every prompt. Images and
     // arbitrary files are both attached with the official `file.attach` RPC.
-    if (_turnApplicationSession != null && !_legacyTransportFallback) {
+    final atlasAttachmentTurn =
+        widget.connection.atlasOwnerEnabled && attachments.isNotEmpty;
+    if (_turnApplicationSession != null &&
+        !_legacyTransportFallback &&
+        !atlasAttachmentTurn) {
       await _sendRecoverableGatewayMessage(
         text: text,
         attachments: attachments,
@@ -1602,6 +2009,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         },
         onChanged: (draft) {
           if (!mounted || responseGeneration != _responseGeneration) return;
+          _recordAttachmentActivity(draft);
           setState(() {
             if (draft.status == AttachmentDraftStatus.uploading) {
               final index = attachments.indexOf(draft);
@@ -1648,6 +2056,10 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
             _messages.add({'role': 'assistant', 'content': ''});
             turnAdded = true;
           });
+          if (desktopGateway != null ||
+              widget.testRemoteTemporaryPromote != null) {
+            _trackTemporaryPromotion(attachments);
+          }
           _scheduleStreamingFollow();
           void onEvent(StreamEvent event) {
             _handleDesktopGatewayEvent(event, responseGeneration);
@@ -1759,6 +2171,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           draft
             ..status = AttachmentDraftStatus.uploading
             ..error = null;
+          _recordAttachmentActivity(draft);
           _gatewayTurnStatus = GatewayTurnStatus(
             kind: 'upload',
             text: 'Uploading ${index + 1}/${attachments.length}: ${draft.name}',
@@ -1778,7 +2191,10 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         );
         staged.add(receipt);
         if (!mounted || responseGeneration != _responseGeneration) return;
-        setState(() => draft.status = AttachmentDraftStatus.attached);
+        setState(() {
+          draft.status = AttachmentDraftStatus.attached;
+          _recordAttachmentActivity(draft);
+        });
       }
     } catch (error) {
       if (staged.isNotEmpty) {
@@ -1796,6 +2212,14 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         draft
           ..status = AttachmentDraftStatus.ready
           ..error = null;
+        _activityCenter.upsertTool(
+          GatewayToolActivity(
+            toolId: 'attachment-${draft.id}',
+            name: draft.isImage ? 'attach_image' : 'attach_file',
+            phase: GatewayToolActivityPhase.failed,
+            detail: 'Staging failed • ${draft.name}',
+          ),
+        );
       }
       _handleSendError(error);
       return;
@@ -1991,32 +2415,13 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     if (event.type == 'notification.show') {
       final notification = GatewayNotification.fromEventData(event.data);
       if (notification == null) return;
-      _notificationTimers.remove(notification.key)?.cancel();
-      setState(() => _gatewayNotifications[notification.key] = notification);
+      _activityCenter.showNotification(notification);
       _scheduleStreamingFollow();
-      if (notification.ttl case final ttl?) {
-        _notificationTimers[notification.key] = Timer(ttl, () {
-          if (!mounted) return;
-          setState(() => _gatewayNotifications.remove(notification.key));
-          _notificationTimers.remove(notification.key);
-        });
-      }
       return;
     }
     if (event.type == 'notification.clear') {
       final key = event.data['key']?.toString().trim();
-      setState(() {
-        if (key == null || key.isEmpty) {
-          _gatewayNotifications.clear();
-          for (final timer in _notificationTimers.values) {
-            timer.cancel();
-          }
-          _notificationTimers.clear();
-        } else {
-          _gatewayNotifications.remove(key);
-          _notificationTimers.remove(key)?.cancel();
-        }
-      });
+      _activityCenter.clearNotification(key);
       _scheduleStreamingFollow();
       return;
     }
@@ -2026,14 +2431,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     }
     final notice = GatewayNotice.fromGatewayEvent(event.type, event.data);
     if (notice == null) return;
-    if (_gatewayNotices.any((item) => item.identity == notice.identity)) return;
-    setState(() {
-      _gatewayNotices.add(notice);
-      if (_gatewayNotices.length > 20) _gatewayNotices.removeAt(0);
-      _savedGatewayNotices[_gatewayNoticeIdentity] = List.unmodifiable(
-        _gatewayNotices,
-      );
-    });
+    if (!_activityCenter.addNotice(notice)) return;
     _scheduleStreamingFollow();
   }
 
@@ -2041,14 +2439,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     final update = GatewaySubagentActivity.fromGatewayEvent(eventType, data);
     if (update == null || !mounted) return;
     setState(() {
-      final index = _subagentActivities.indexWhere(
-        (activity) => activity.id == update.id,
-      );
-      if (index < 0) {
-        _subagentActivities.add(update);
-      } else {
-        _subagentActivities[index] = _subagentActivities[index].merge(update);
-      }
+      _activityCenter.upsertSubagent(update);
       if (!update.isComplete) {
         _gatewayTurnStatus = GatewayTurnStatus(
           kind: 'subagent',
@@ -2066,15 +2457,18 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     if (_approvalDialogOpen) return;
     final request = GatewayApprovalRequest.fromEventData(eventData);
     _approvalDialogOpen = true;
+    _syncActivityNeedsInput();
 
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted || responseGeneration != _responseGeneration) {
         _approvalDialogOpen = false;
+        _syncActivityNeedsInput();
         return;
       }
       final desktopGateway = _desktopGateway;
       if (desktopGateway == null) {
         _approvalDialogOpen = false;
+        _syncActivityNeedsInput();
         return;
       }
 
@@ -2090,6 +2484,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         ),
       );
       _approvalDialogOpen = false;
+      _syncActivityNeedsInput();
       _drainClarifyPromptQueue();
       _drainSensitivePromptQueue();
 
@@ -2135,6 +2530,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     _sensitivePromptQueue.add(
       _PendingSensitivePrompt(request, responseGeneration),
     );
+    _syncActivityNeedsInput();
     _drainSensitivePromptQueue();
   }
 
@@ -2148,6 +2544,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     }
     final pending = _sensitivePromptQueue.removeAt(0);
     _activeSensitivePrompt = pending;
+    _syncActivityNeedsInput();
 
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted ||
@@ -2157,12 +2554,14 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
               pending.request.requestId) {
         _expiredSensitivePromptIds.remove(pending.request.requestId);
         _activeSensitivePrompt = null;
+        _syncActivityNeedsInput();
         _drainSensitivePromptQueue();
         return;
       }
       final desktopGateway = _desktopGateway;
       if (desktopGateway == null) {
         _activeSensitivePrompt = null;
+        _syncActivityNeedsInput();
         _drainSensitivePromptQueue();
         return;
       }
@@ -2192,6 +2591,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           pending.request.requestId) {
         _activeSensitivePrompt = null;
       }
+      _syncActivityNeedsInput();
       if (result == null &&
           mounted &&
           pending.responseGeneration == _responseGeneration) {
@@ -2236,6 +2636,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     } else if (_activeSensitivePrompt?.request.requestId != requestId) {
       _expiredSensitivePromptIds.remove(requestId);
     }
+    _syncActivityNeedsInput();
   }
 
   void _queueClarifyPrompt(
@@ -2252,6 +2653,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     if (duplicate) return;
 
     _clarifyPromptQueue.add(_PendingClarifyPrompt(request, responseGeneration));
+    _syncActivityNeedsInput();
     _drainClarifyPromptQueue();
   }
 
@@ -2265,6 +2667,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     }
     final pending = _clarifyPromptQueue.removeAt(0);
     _activeClarifyPrompt = pending;
+    _syncActivityNeedsInput();
 
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted ||
@@ -2272,6 +2675,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           _activeClarifyPrompt?.request.requestId !=
               pending.request.requestId) {
         _activeClarifyPrompt = null;
+        _syncActivityNeedsInput();
         _drainSensitivePromptQueue();
         _drainClarifyPromptQueue();
         return;
@@ -2279,6 +2683,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       final desktopGateway = _desktopGateway;
       if (desktopGateway == null) {
         _activeClarifyPrompt = null;
+        _syncActivityNeedsInput();
         _drainSensitivePromptQueue();
         _drainClarifyPromptQueue();
         return;
@@ -2299,6 +2704,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           pending.request.requestId) {
         _activeClarifyPrompt = null;
       }
+      _syncActivityNeedsInput();
 
       // System Back or a barrier dismiss maps to the official empty answer,
       // matching Hermes Desktop's Skip behavior.
@@ -2323,6 +2729,16 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       _drainSensitivePromptQueue();
       _drainClarifyPromptQueue();
     });
+  }
+
+  void _syncActivityNeedsInput() {
+    _activityCenter.setNeedsInput(
+      _approvalDialogOpen ||
+          _activeSensitivePrompt != null ||
+          _sensitivePromptQueue.isNotEmpty ||
+          _activeClarifyPrompt != null ||
+          _clarifyPromptQueue.isNotEmpty,
+    );
   }
 
   Future<void> _stopResponse() async {
@@ -2417,23 +2833,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     final update = GatewayToolActivity.fromGatewayEvent(eventType, progress);
     if (update == null) return;
     setState(() {
-      var idx = update.toolId == null
-          ? -1
-          : _toolActivities.indexWhere(
-              (activity) => activity.toolId == update.toolId,
-            );
-      if (idx < 0) {
-        idx = _toolActivities.lastIndexWhere(
-          (activity) =>
-              !activity.isTerminal &&
-              activity.name.toLowerCase() == update.name.toLowerCase(),
-        );
-      }
-      if (idx >= 0) {
-        _toolActivities[idx] = _toolActivities[idx].merge(update);
-      } else {
-        _toolActivities.add(update);
-      }
+      _activityCenter.upsertTool(update);
       _gatewayTurnStatus = GatewayTurnStatus(
         kind: 'tool',
         text: update.isTerminal
@@ -2443,6 +2843,48 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     });
 
     _scheduleStreamingFollow();
+  }
+
+  Future<void> _showActivityCenter() {
+    return showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      showDragHandle: true,
+      builder: (_) => GatewayActivityCenterSheet(controller: _activityCenter),
+    );
+  }
+
+  Future<void> _showGatewayNotice(GatewayNotice notice) {
+    return showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(notice.title),
+        content: SingleChildScrollView(
+          child: SelectionArea(child: Text(notice.text)),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _dismissGatewayNotice(GatewayNotice notice) async {
+    try {
+      await _activityCenter.dismissNotice(notice.identity);
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Could not save the dismissed Activity item.'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+    }
   }
 
   @override
@@ -2503,6 +2945,16 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           ],
         ),
         actions: [
+          IconButton(
+            key: const Key('open-activity-center'),
+            tooltip: 'Hermes activity',
+            onPressed: _showActivityCenter,
+            icon: Badge(
+              isLabelVisible: _activityCenter.attentionCount > 0,
+              label: Text('${_activityCenter.attentionCount}'),
+              child: const Icon(Icons.receipt_long_outlined),
+            ),
+          ),
           if (_streaming)
             const Padding(
               padding: EdgeInsets.only(right: 8),
@@ -2551,23 +3003,18 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           ),
           child: Column(
             children: [
-              for (final notification in _gatewayNotifications.values)
+              for (final notification in _activityCenter.notifications)
                 _buildGatewayNotification(notification),
               if (_legacyTransportFallback)
-                Container(
+                Align(
                   key: const ValueKey('legacy-transport-notice'),
-                  width: double.infinity,
-                  color: Theme.of(context).colorScheme.tertiaryContainer,
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 10,
-                  ),
-                  child: Text(
-                    _legacyTransportNotice,
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      color: Theme.of(context).colorScheme.onTertiaryContainer,
-                      fontWeight: FontWeight.w600,
+                  alignment: Alignment.centerLeft,
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
+                    child: ActionChip(
+                      avatar: const Icon(Icons.cloud_off_outlined, size: 18),
+                      label: const Text('Legacy transport • recovery off'),
+                      onPressed: _showActivityCenter,
                     ),
                   ),
                 ),
@@ -2575,7 +3022,10 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                 child: Stack(
                   children: [
                     Positioned.fill(child: _buildBody()),
-                    if (_endAffordanceController.isVisible)
+                    if (_endAffordanceController.isVisible ||
+                        (_streaming &&
+                            !_scrollCoordinator.shouldFollowStreaming &&
+                            !_endAffordanceController.isAtEnd))
                       Positioned(
                         right: 12,
                         bottom: 12,
@@ -2610,10 +3060,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       content: SelectionArea(child: Text(notification.text)),
       actions: [
         TextButton(
-          onPressed: () {
-            _notificationTimers.remove(notification.key)?.cancel();
-            setState(() => _gatewayNotifications.remove(notification.key));
-          },
+          onPressed: () => _activityCenter.clearNotification(notification.key),
           child: const Text('Dismiss'),
         ),
       ],
@@ -2666,48 +3113,236 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                   ],
                 ),
               ),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(4, 2, 4, 4),
-                child: Semantics(
-                  label: 'Choose chat model',
-                  value: _sessionModel ?? widget.session.model,
-                  button: true,
-                  enabled:
-                      !(_sending ||
-                          _streaming ||
-                          _loadingModelOptions ||
-                          _changingModel),
-                  excludeSemantics: true,
-                  child: ConstrainedBox(
-                    constraints: const BoxConstraints(minHeight: 48),
-                    child: TextButton.icon(
-                      onPressed:
-                          (_sending ||
+            Padding(
+              padding: const EdgeInsets.fromLTRB(4, 2, 4, 4),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Semantics(
+                      label: 'Choose chat model',
+                      value: _sessionModel ?? widget.session.model,
+                      button: true,
+                      enabled:
+                          !(_sending ||
                               _streaming ||
                               _loadingModelOptions ||
-                              _changingModel)
-                          ? null
-                          : _showModelSelector,
-                      icon: _loadingModelOptions || _changingModel
-                          ? const SizedBox(
-                              width: 16,
-                              height: 16,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Icon(Icons.tune, size: 18),
-                      label: Text(
-                        '${_sessionModel ?? widget.session.model} • '
-                        '${_sessionModelOverride ? 'this chat' : 'profile default'}',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
+                              _changingModel),
+                      excludeSemantics: true,
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(minHeight: 48),
+                        child: TextButton.icon(
+                          onPressed:
+                              (_sending ||
+                                  _streaming ||
+                                  _loadingModelOptions ||
+                                  _changingModel)
+                              ? null
+                              : _showModelSelector,
+                          icon: _loadingModelOptions || _changingModel
+                              ? const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : const Icon(Icons.tune, size: 18),
+                          label: Text(
+                            '${_sessionModel ?? widget.session.model} • '
+                            '${_sessionModelOverride ? 'this chat' : 'profile default'}',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
                       ),
                     ),
                   ),
-                ),
+                  Semantics(
+                    label: 'Choose conversation style',
+                    value:
+                        _interactionModeState?.mode.label ?? 'Checking server',
+                    button: true,
+                    enabled:
+                        !(_sending ||
+                            _streaming ||
+                            _changingInteractionMode ||
+                            _interactionModeState == null),
+                    excludeSemantics: true,
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(minHeight: 48),
+                      child:
+                          MediaQuery.textScalerOf(context).scale(1) >= 1.5 ||
+                              MediaQuery.sizeOf(context).width < 390
+                          ? IconButton(
+                              key: const Key('chat-interaction-mode-selector'),
+                              tooltip:
+                                  _interactionModeState?.mode.label ??
+                                  'Conversation style',
+                              onPressed:
+                                  (_sending ||
+                                      _streaming ||
+                                      _changingInteractionMode ||
+                                      _interactionModeState == null)
+                                  ? null
+                                  : _showInteractionModeSelector,
+                              icon: _changingInteractionMode
+                                  ? const SizedBox(
+                                      width: 16,
+                                      height: 16,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                      ),
+                                    )
+                                  : const Icon(Icons.forum_outlined),
+                            )
+                          : TextButton.icon(
+                              key: const Key('chat-interaction-mode-selector'),
+                              onPressed:
+                                  (_sending ||
+                                      _streaming ||
+                                      _changingInteractionMode ||
+                                      _interactionModeState == null)
+                                  ? null
+                                  : _showInteractionModeSelector,
+                              icon: _changingInteractionMode
+                                  ? const SizedBox(
+                                      width: 16,
+                                      height: 16,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                      ),
+                                    )
+                                  : const Icon(Icons.forum_outlined, size: 18),
+                              label: Text(
+                                _interactionModeState?.mode.label ?? 'Mode',
+                              ),
+                            ),
+                    ),
+                  ),
+                  Semantics(
+                    label: 'Choose permission level',
+                    value: _effectiveFullControl == null
+                        ? 'Checking server'
+                        : _effectiveFullControl!
+                        ? 'Full control'
+                        : 'Standard',
+                    button: true,
+                    enabled: !(_sending || _streaming || _changingPermission),
+                    excludeSemantics: true,
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(minHeight: 48),
+                      child:
+                          MediaQuery.textScalerOf(context).scale(1) >= 1.5 ||
+                              MediaQuery.sizeOf(context).width < 360
+                          ? IconButton(
+                              key: const Key('chat-permission-selector'),
+                              tooltip: _effectiveFullControl == true
+                                  ? 'Full control'
+                                  : 'Standard permissions',
+                              onPressed:
+                                  (_sending ||
+                                      _streaming ||
+                                      _changingPermission)
+                                  ? null
+                                  : _showPermissionSelector,
+                              icon: _changingPermission
+                                  ? const SizedBox(
+                                      width: 16,
+                                      height: 16,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                      ),
+                                    )
+                                  : Icon(
+                                      _effectiveFullControl == true
+                                          ? Icons.bolt
+                                          : Icons.verified_user_outlined,
+                                    ),
+                            )
+                          : TextButton.icon(
+                              key: const Key('chat-permission-selector'),
+                              onPressed:
+                                  (_sending ||
+                                      _streaming ||
+                                      _changingPermission)
+                                  ? null
+                                  : _showPermissionSelector,
+                              icon: _changingPermission
+                                  ? const SizedBox(
+                                      width: 16,
+                                      height: 16,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                      ),
+                                    )
+                                  : Icon(
+                                      _effectiveFullControl == true
+                                          ? Icons.bolt
+                                          : Icons.verified_user_outlined,
+                                      size: 18,
+                                    ),
+                              label: Text(
+                                _effectiveFullControl == null
+                                    ? 'Permissions'
+                                    : _effectiveFullControl!
+                                    ? 'Full control'
+                                    : 'Standard',
+                              ),
+                            ),
+                    ),
+                  ),
+                ],
               ),
             ),
+            if (_pendingPromotions.isNotEmpty)
+              Container(
+                width: double.infinity,
+                margin: const EdgeInsets.fromLTRB(4, 4, 4, 8),
+                padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.tertiaryContainer,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Semantics(
+                  label: 'Temporary attachments awaiting promotion',
+                  child: Row(
+                    children: [
+                      const Icon(Icons.hourglass_bottom, size: 20),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          _pendingPromotions.length == 1
+                              ? '${_pendingPromotions.first.name} is temporary, not a Document.'
+                              : '${_pendingPromotions.length} attachments are temporary, not Documents.',
+                        ),
+                      ),
+                      FilledButton.icon(
+                        key: const Key('promote-temporary-attachments'),
+                        onPressed: _promotingTemporaryAttachments
+                            ? null
+                            : () => unawaited(
+                                _promoteTemporaryAttachments(
+                                  _desktopGateway,
+                                  List<AttachmentDraft>.from(
+                                    _pendingPromotions,
+                                  ),
+                                ),
+                              ),
+                        icon: _promotingTemporaryAttachments
+                            ? const SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : const Icon(Icons.drive_file_move, size: 18),
+                        label: const Text('Promote'),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
             if (_attachmentDrafts.isNotEmpty)
               Container(
                 width: double.infinity,
@@ -2918,8 +3553,30 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     final displayMessages = <dynamic>[];
     final currentGroup = <GatewayToolActivity>[];
     String? lastUserPrompt;
+    var subagentsPlaced = false;
+    int? lastAssistantIndex;
 
-    for (final msg in _messages) {
+    for (var index = _messages.length - 1; index >= 0; index--) {
+      final message = _messages[index];
+      if (isToolResultMessage(message)) continue;
+      if ((message['role']?.toString() ?? 'assistant') == 'assistant') {
+        lastAssistantIndex = index;
+        break;
+      }
+    }
+
+    void flushCurrentGroup() {
+      if (currentGroup.isEmpty) return;
+      displayMessages.add(currentGroup.toList());
+      currentGroup.clear();
+    }
+
+    for (
+      var messageIndex = 0;
+      messageIndex < _messages.length;
+      messageIndex++
+    ) {
+      final msg = _messages[messageIndex];
       final role = (msg['role'] as String?) ?? 'assistant';
       if (isToolResultMessage(msg)) {
         if (toolQueue.isNotEmpty) {
@@ -2930,45 +3587,55 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       if (role != 'user' && role != 'assistant') continue;
       final content = stripToolResultText(messageContentToText(msg['content']));
       final reasoning = msg['_gateway_reasoning']?.toString() ?? '';
-      if (content.isEmpty && reasoning.trim().isEmpty) continue;
 
-      if (currentGroup.isNotEmpty) {
-        displayMessages.add(currentGroup.toList());
-        currentGroup.clear();
+      if (role == 'user') {
+        flushCurrentGroup();
+        if (content.isEmpty) continue;
+        lastUserPrompt = content;
+        displayMessages.add({...msg, '_display_content': content});
+        continue;
       }
-      if (role == 'assistant' && reasoning.trim().isNotEmpty) {
+
+      final isLatestAssistant = messageIndex == lastAssistantIndex;
+      if (reasoning.trim().isNotEmpty) {
+        displayMessages.add(_GatewayReasoningDisplay(reasoning));
+      }
+      flushCurrentGroup();
+
+      // Live Gateway activity has no stored tool-result message yet. Attach it
+      // to the latest assistant turn before its generated text.
+      if (isLatestAssistant && toolQueue.isNotEmpty) {
+        displayMessages.add(toolQueue.toList());
+        toolQueue.clear();
+      }
+      if (isLatestAssistant && _subagentActivities.isNotEmpty) {
         displayMessages.add(
-          _GatewayReasoningDisplay(
-            reasoning,
-            _verboseMode || msg['_gateway_reasoning_verbose'] == true,
-          ),
+          List<GatewaySubagentActivity>.from(_subagentActivities),
         );
+        subagentsPlaced = true;
       }
+
       if (content.isNotEmpty) {
-        if (role == 'user') lastUserPrompt = content;
         displayMessages.add({
           ...msg,
           '_display_content': content,
-          if (role == 'assistant' && lastUserPrompt != null)
-            '_retry_prompt': lastUserPrompt,
+          '_retry_prompt': ?lastUserPrompt,
         });
       }
     }
-    if (currentGroup.isNotEmpty) {
-      displayMessages.add(currentGroup.toList());
-    }
+    flushCurrentGroup();
 
     // Tools from SSE events that arrived during streaming but haven't been
     // matched to server messages yet — show them as a card.
     if (toolQueue.isNotEmpty) {
       displayMessages.add(toolQueue.toList());
     }
-    if (_subagentActivities.isNotEmpty) {
+    if (!subagentsPlaced && _subagentActivities.isNotEmpty) {
       displayMessages.add(
         List<GatewaySubagentActivity>.from(_subagentActivities),
       );
     }
-    displayMessages.addAll(_gatewayNotices);
+    displayMessages.addAll(_activityCenter.transcriptNotices);
 
     return NotificationListener<ScrollMetricsNotification>(
       onNotification: (notification) {
@@ -2985,22 +3652,20 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
             final item = displayMessages[index];
 
             if (item is List<GatewayToolActivity>) {
-              return GatewayActivityCard(
-                activities: item,
-                verbose: _verboseMode,
-              );
+              return GatewayActivityCard(activities: item);
             }
             if (item is List<GatewaySubagentActivity>) {
               return GatewaySubagentCard(activities: item);
             }
             if (item is _GatewayReasoningDisplay) {
-              return GatewayReasoningCard(
-                text: item.text,
-                initiallyExpanded: item.initiallyExpanded,
-              );
+              return GatewayReasoningCard(text: item.text);
             }
             if (item is GatewayNotice) {
-              return GatewayNoticeCard(notice: item);
+              return GatewayNoticeCard(
+                notice: item,
+                onView: () => _showGatewayNotice(item),
+                onDismiss: () => _dismissGatewayNotice(item),
+              );
             }
 
             final msg = item as Map<String, dynamic>;
@@ -3018,6 +3683,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
               onReadAloud: isUser
                   ? null
                   : () => _readAssistantText(content, announce: true),
+              onShare: () => _shareMessage(content),
               onEdit: isUser ? () => _editAndResend(content) : null,
               onRetry: isUser
                   ? null
@@ -3056,6 +3722,7 @@ class MessageBubble extends StatelessWidget {
   final bool verbose;
   final Map<String, dynamic> metadata;
   final Future<void> Function()? onReadAloud;
+  final Future<void> Function()? onShare;
   final VoidCallback? onEdit;
   final Future<void> Function()? onRetry;
 
@@ -3066,6 +3733,7 @@ class MessageBubble extends StatelessWidget {
     this.verbose = false,
     this.metadata = const {},
     this.onReadAloud,
+    this.onShare,
     this.onEdit,
     this.onRetry,
   });
@@ -3085,13 +3753,157 @@ class MessageBubble extends StatelessWidget {
       );
   }
 
+  Future<void> _showSelectableText(BuildContext context) {
+    return showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (sheetContext) => SafeArea(
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.sizeOf(sheetContext).height * 0.78,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.text_fields),
+                title: const Text('Select text'),
+                subtitle: Text(isUser ? 'Your message' : 'Hermes response'),
+              ),
+              const Divider(height: 1),
+              Flexible(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.all(20),
+                  child: SelectableText(
+                    content,
+                    key: const Key('message-selectable-text'),
+                  ),
+                ),
+              ),
+              const Divider(height: 1),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(sheetContext),
+                      child: const Text('Done'),
+                    ),
+                    const SizedBox(width: 8),
+                    FilledButton.icon(
+                      key: const Key('copy-all-message-text'),
+                      onPressed: () => _copyMessage(sheetContext),
+                      icon: const Icon(Icons.copy_outlined),
+                      label: const Text('Copy all'),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showMessageActions(BuildContext context) {
+    return showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (sheetContext) {
+        Future<void> run(FutureOr<void> Function() action) async {
+          Navigator.pop(sheetContext);
+          await Future<void>.delayed(Duration.zero);
+          if (!context.mounted) return;
+          await action();
+        }
+
+        final actions = <Widget>[
+          ListTile(
+            key: const Key('message-action-copy'),
+            leading: const Icon(Icons.copy_outlined),
+            title: const Text('Copy'),
+            onTap: () => unawaited(run(() => _copyMessage(context))),
+          ),
+          ListTile(
+            key: const Key('message-action-select-text'),
+            leading: const Icon(Icons.text_fields),
+            title: const Text('Select text'),
+            onTap: () => unawaited(run(() => _showSelectableText(context))),
+          ),
+          if (onReadAloud != null)
+            ListTile(
+              key: const Key('message-action-read-aloud'),
+              leading: const Icon(Icons.volume_up_outlined),
+              title: const Text('Read aloud'),
+              onTap: () => unawaited(run(onReadAloud!)),
+            ),
+          if (onShare != null)
+            ListTile(
+              key: const Key('message-action-share'),
+              leading: const Icon(Icons.share_outlined),
+              title: const Text('Share'),
+              onTap: () => unawaited(run(onShare!)),
+            ),
+          if (onEdit != null)
+            ListTile(
+              key: const Key('message-action-edit'),
+              leading: const Icon(Icons.edit_outlined),
+              title: const Text('Edit and resend'),
+              onTap: () => unawaited(run(onEdit!)),
+            ),
+          if (onRetry != null)
+            ListTile(
+              key: const Key('message-action-regenerate'),
+              leading: const Icon(Icons.refresh),
+              title: const Text('Regenerate response'),
+              subtitle: const Text('Uses the preceding prompt'),
+              onTap: () => unawaited(run(onRetry!)),
+            ),
+        ];
+
+        return SafeArea(
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxHeight: MediaQuery.sizeOf(sheetContext).height * 0.82,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ListTile(
+                  leading: const Icon(Icons.more_horiz),
+                  title: const Text('Message actions'),
+                  subtitle: Text(isUser ? 'Your message' : 'Hermes response'),
+                ),
+                const Divider(height: 1),
+                Flexible(
+                  child: SingleChildScrollView(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: actions,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
 
     // Bubble colors
-    const userBubbleColor = hermesUserMessageBubbleBackground;
+    final userBubbleColor = theme.colorScheme.primaryContainer;
+    final userTextColor = theme.colorScheme.onPrimaryContainer;
     final assistantBubbleColor = isDark
         ? const Color(0xFF2A2A2A)
         : const Color(0xFFEAEAEA);
@@ -3150,7 +3962,7 @@ class MessageBubble extends StatelessWidget {
                           fontSize: 11,
                           fontFamily: 'monospace',
                           color: isUser
-                              ? hermesUserMessageForeground
+                              ? userTextColor
                               : (isDark ? Colors.grey[400] : Colors.grey[600]),
                         ),
                       ),
@@ -3165,9 +3977,7 @@ class MessageBubble extends StatelessWidget {
             selectable: true,
             styleSheet: MarkdownStyleSheet(
               p: (isUser
-                  ? theme.textTheme.bodyMedium?.copyWith(
-                      color: hermesUserMessageForeground,
-                    )
+                  ? theme.textTheme.bodyMedium?.copyWith(color: userTextColor)
                   : theme.textTheme.bodyMedium?.copyWith(
                       color: assistantTextColor,
                     )),
@@ -3175,37 +3985,31 @@ class MessageBubble extends StatelessWidget {
                 backgroundColor: (isUser ? Colors.white : Colors.black)
                     .withValues(alpha: 0.12),
                 fontFamily: 'monospace',
-                color: isUser ? hermesUserMessageForeground : null,
+                color: isUser ? userTextColor : null,
               ),
               a: TextStyle(
-                color: isUser
-                    ? hermesUserMessageForeground
-                    : theme.colorScheme.primary,
+                color: isUser ? userTextColor : theme.colorScheme.primary,
               ),
               h1: isUser
                   ? theme.textTheme.headlineSmall?.copyWith(
-                      color: hermesUserMessageForeground,
+                      color: userTextColor,
                     )
                   : theme.textTheme.headlineSmall,
               h2: isUser
-                  ? theme.textTheme.titleLarge?.copyWith(
-                      color: hermesUserMessageForeground,
-                    )
+                  ? theme.textTheme.titleLarge?.copyWith(color: userTextColor)
                   : theme.textTheme.titleLarge,
               h3: isUser
-                  ? theme.textTheme.titleMedium?.copyWith(
-                      color: hermesUserMessageForeground,
-                    )
+                  ? theme.textTheme.titleMedium?.copyWith(color: userTextColor)
                   : theme.textTheme.titleMedium,
               blockquote: TextStyle(
-                color: isUser ? hermesUserMessageForeground : Colors.grey,
+                color: isUser ? userTextColor : Colors.grey,
                 fontStyle: FontStyle.italic,
               ),
               blockquoteDecoration: BoxDecoration(
                 border: Border(
                   left: BorderSide(
                     color: isUser
-                        ? hermesUserMessageForeground.withValues(alpha: 0.65)
+                        ? userTextColor.withValues(alpha: 0.65)
                         : theme.colorScheme.primary,
                     width: 3,
                   ),
@@ -3214,7 +4018,7 @@ class MessageBubble extends StatelessWidget {
               em: isUser
                   ? theme.textTheme.bodyMedium?.copyWith(
                       fontStyle: FontStyle.italic,
-                      color: hermesUserMessageForeground,
+                      color: userTextColor,
                     )
                   : theme.textTheme.bodyMedium?.copyWith(
                       fontStyle: FontStyle.italic,
@@ -3222,7 +4026,7 @@ class MessageBubble extends StatelessWidget {
               strong: isUser
                   ? theme.textTheme.bodyMedium?.copyWith(
                       fontWeight: FontWeight.bold,
-                      color: hermesUserMessageForeground,
+                      color: userTextColor,
                     )
                   : theme.textTheme.bodyMedium?.copyWith(
                       fontWeight: FontWeight.bold,
@@ -3232,70 +4036,20 @@ class MessageBubble extends StatelessWidget {
           const SizedBox(height: 4),
           Align(
             alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
-            child: Wrap(
-              spacing: 0,
-              runSpacing: 0,
-              children: [
-                Semantics(
-                  label: 'Copy message',
-                  button: true,
-                  excludeSemantics: true,
-                  child: IconButton(
-                    icon: const Icon(Icons.copy_outlined, size: 19),
-                    tooltip: 'Copy message',
-                    onPressed: () => _copyMessage(context),
-                    constraints: const BoxConstraints.tightFor(
-                      width: 48,
-                      height: 48,
-                    ),
-                  ),
+            child: Semantics(
+              label: 'Message actions',
+              button: true,
+              excludeSemantics: true,
+              child: IconButton(
+                key: const Key('message-actions-button'),
+                icon: const Icon(Icons.more_horiz, size: 21),
+                tooltip: 'Message actions',
+                onPressed: () => _showMessageActions(context),
+                constraints: const BoxConstraints.tightFor(
+                  width: 48,
+                  height: 48,
                 ),
-                if (onReadAloud != null)
-                  Semantics(
-                    label: 'Read aloud',
-                    button: true,
-                    excludeSemantics: true,
-                    child: IconButton(
-                      icon: const Icon(Icons.volume_up_outlined, size: 20),
-                      tooltip: 'Read aloud',
-                      onPressed: onReadAloud,
-                      constraints: const BoxConstraints.tightFor(
-                        width: 48,
-                        height: 48,
-                      ),
-                    ),
-                  ),
-                if (onEdit != null)
-                  Semantics(
-                    label: 'Edit and resend',
-                    button: true,
-                    excludeSemantics: true,
-                    child: IconButton(
-                      icon: const Icon(Icons.edit_outlined, size: 20),
-                      tooltip: 'Edit and resend',
-                      onPressed: onEdit,
-                      constraints: const BoxConstraints.tightFor(
-                        width: 48,
-                        height: 48,
-                      ),
-                    ),
-                  ),
-                if (onRetry != null)
-                  Semantics(
-                    label: 'Regenerate response',
-                    button: true,
-                    excludeSemantics: true,
-                    child: IconButton(
-                      icon: const Icon(Icons.refresh, size: 20),
-                      tooltip: 'Regenerate from the preceding prompt',
-                      onPressed: onRetry,
-                      constraints: const BoxConstraints.tightFor(
-                        width: 48,
-                        height: 48,
-                      ),
-                    ),
-                  ),
-              ],
+              ),
             ),
           ),
         ],

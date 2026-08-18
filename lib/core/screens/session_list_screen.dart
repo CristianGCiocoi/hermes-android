@@ -5,11 +5,16 @@ import '../services/connection_manager.dart';
 import '../services/desktop_gateway_client.dart';
 import '../services/gateway_turn_application_controller.dart';
 import '../services/ws_client.dart';
+import '../services/atlas_project_port.dart';
+import '../services/atlas_owner_client.dart';
+import '../models/mobile_session_continuity.dart';
+import '../services/session_continuity_port.dart';
 import 'chat_screen.dart';
 import 'settings_screen.dart';
 import 'memory_screen.dart';
 import 'cron_screen.dart';
 import 'skills_screen.dart';
+import 'projects_screen.dart';
 
 Future<String?> showSessionNameDialog({
   required BuildContext context,
@@ -47,10 +52,25 @@ Future<String?> showSessionNameDialog({
 class SessionListScreen extends StatefulWidget {
   final SavedConnection connection;
   final GatewayTurnApplicationController turnApplicationController;
+  final ProjectCatalogController? projectCatalogController;
+  final String? canonicalProjectProfileId;
+  final SessionContinuityController? sessionContinuityController;
+  final String? canonicalSessionProfileId;
+  final MobileSessionOpenRequest? initialSessionOpenRequest;
+  final ApiClient? apiClient;
+  final Future<void> Function(ProfileScopedSession scoped)?
+  onContinuitySessionAuthorized;
 
   const SessionListScreen({
     required this.connection,
     required this.turnApplicationController,
+    this.projectCatalogController,
+    this.canonicalProjectProfileId,
+    this.sessionContinuityController,
+    this.canonicalSessionProfileId,
+    this.initialSessionOpenRequest,
+    this.apiClient,
+    this.onContinuitySessionAuthorized,
     super.key,
   });
 
@@ -60,7 +80,12 @@ class SessionListScreen extends StatefulWidget {
 
 class _SessionListScreenState extends State<SessionListScreen> {
   late final ApiClient _client;
+  late final bool _ownsClient;
   DesktopGatewayClient? _desktopGateway;
+  AtlasOwnerClient? _atlasOwnerClient;
+  late final ProjectCatalogController? _projectCatalogController;
+  late final SessionContinuityController? _sessionContinuityController;
+  String? _canonicalOwnerProfileId;
   final _searchController = TextEditingController();
   List<SavedConnection> _profiles = const [];
   List<Session> _sessions = [];
@@ -69,15 +94,22 @@ class _SessionListScreenState extends State<SessionListScreen> {
   bool _healthOk = false;
   final Set<String> _deletingSessionIds = {};
   final Set<String> _branchingSessionIds = {};
+  bool _continuityOpenAttempted = false;
+
+  String? get _effectiveProjectProfileId =>
+      widget.canonicalProjectProfileId ?? _canonicalOwnerProfileId;
 
   @override
   void initState() {
     super.initState();
-    _client = ApiClient(
-      baseUrl: widget.connection.baseUrl,
-      apiKey: widget.connection.apiKey,
-      pathPrefix: widget.connection.gatewayPrefix ?? '',
-    );
+    _ownsClient = widget.apiClient == null;
+    _client =
+        widget.apiClient ??
+        ApiClient(
+          baseUrl: widget.connection.baseUrl,
+          apiKey: widget.connection.apiKey,
+          pathPrefix: widget.connection.gatewayPrefix ?? '',
+        );
     if (widget.connection.desktopGatewayUrl?.trim().isNotEmpty == true) {
       try {
         _desktopGateway = DesktopGatewayClient.fromConnection(
@@ -87,6 +119,29 @@ class _SessionListScreenState extends State<SessionListScreen> {
         _desktopGateway = null;
       }
     }
+    final requestedOwnerProfile = atlasOwnerProfileRequest(widget.connection);
+    if (widget.connection.atlasOwnerEnabled && requestedOwnerProfile != null) {
+      try {
+        _atlasOwnerClient = AtlasOwnerClient.fromConnection(widget.connection);
+        _canonicalOwnerProfileId = requestedOwnerProfile;
+      } on FormatException {
+        _atlasOwnerClient = null;
+        _canonicalOwnerProfileId = null;
+      }
+    }
+    _projectCatalogController =
+        widget.projectCatalogController ??
+        (_desktopGateway == null
+            ? null
+            : ProjectCatalogController(
+                HermesDesktopProjectsPort(_desktopGateway!),
+                atlas: _atlasOwnerClient,
+              ));
+    _sessionContinuityController =
+        widget.sessionContinuityController ??
+        (_atlasOwnerClient == null
+            ? null
+            : SessionContinuityController(_atlasOwnerClient!));
     _loadProfiles();
     _checkHealth();
   }
@@ -158,8 +213,9 @@ class _SessionListScreenState extends State<SessionListScreen> {
   @override
   void dispose() {
     _searchController.dispose();
+    _atlasOwnerClient?.close();
     _desktopGateway?.close();
-    _client.close();
+    if (_ownsClient) _client.close();
     super.dispose();
   }
 
@@ -252,6 +308,8 @@ class _SessionListScreenState extends State<SessionListScreen> {
     await Future<void>.delayed(kThemeAnimationDuration);
     if (!mounted) return;
     switch (action) {
+      case 'project':
+        await _chooseProjectForSession(session);
       case 'rename':
         await _renameSession(session);
       case 'branch':
@@ -259,6 +317,29 @@ class _SessionListScreenState extends State<SessionListScreen> {
       case 'delete':
         await _confirmDeleteSession(session);
     }
+  }
+
+  Future<void> _chooseProjectForSession(Session session) async {
+    final controller = _projectCatalogController;
+    final profileId = _effectiveProjectProfileId;
+    if (controller == null ||
+        controller.atlasEnrichmentEnabled && profileId == null ||
+        !mounted) {
+      return;
+    }
+    await Navigator.push<void>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ProjectsScreen(
+          controller: controller,
+          canonicalProfileId: profileId,
+          conversationId: session.id,
+          onProjectSelected: (_) {
+            if (Navigator.canPop(context)) Navigator.pop(context);
+          },
+        ),
+      ),
+    );
   }
 
   Future<void> _fetchSessions() async {
@@ -280,12 +361,55 @@ class _SessionListScreenState extends State<SessionListScreen> {
         _sessions = filtered;
         _loading = false;
       });
+      await _openInitialSharedSession();
     } catch (e) {
       if (!mounted) return;
       setState(() {
         _error = e.toString();
         _loading = false;
       });
+    }
+  }
+
+  Future<void> _openInitialSharedSession() async {
+    final controller = _sessionContinuityController;
+    final profileId =
+        widget.canonicalSessionProfileId ?? _canonicalOwnerProfileId;
+    final request = widget.initialSessionOpenRequest;
+    if (_continuityOpenAttempted ||
+        controller == null ||
+        profileId == null ||
+        request == null ||
+        !mounted) {
+      return;
+    }
+    _continuityOpenAttempted = true;
+    try {
+      final scoped = await controller.authorizeOpen(
+        request: request,
+        selectedProfileId: profileId,
+      );
+      if (!mounted) return;
+      final authorized = widget.onContinuitySessionAuthorized;
+      if (authorized != null) {
+        await authorized(scoped);
+        return;
+      }
+      await Navigator.push<void>(
+        context,
+        MaterialPageRoute(
+          builder: (_) => ChatScreen(
+            connection: scoped.connection,
+            session: scoped.session,
+            turnApplicationController: widget.turnApplicationController,
+          ),
+        ),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Shared session could not be opened.')),
+      );
     }
   }
 
@@ -467,6 +591,19 @@ class _SessionListScreenState extends State<SessionListScreen> {
               onTap: () =>
                   _openScreen(SkillsScreen(connection: widget.connection)),
             ),
+            if (_projectCatalogController != null &&
+                (!_projectCatalogController.atlasEnrichmentEnabled ||
+                    _effectiveProjectProfileId != null))
+              ListTile(
+                leading: const Icon(Icons.account_tree_outlined),
+                title: const Text('Projects'),
+                onTap: () => _openScreen(
+                  ProjectsScreen(
+                    controller: _projectCatalogController,
+                    canonicalProfileId: _effectiveProjectProfileId,
+                  ),
+                ),
+              ),
             const Divider(),
             ListTile(
               leading: const Icon(Icons.settings),
@@ -624,6 +761,17 @@ class _SessionListScreenState extends State<SessionListScreen> {
                       onSelected: (action) =>
                           _handleSessionAction(action, session),
                       itemBuilder: (_) => [
+                        if (_projectCatalogController != null &&
+                            (!_projectCatalogController
+                                    .atlasEnrichmentEnabled ||
+                                _effectiveProjectProfileId != null))
+                          const PopupMenuItem(
+                            value: 'project',
+                            child: ListTile(
+                              leading: Icon(Icons.account_tree_outlined),
+                              title: Text('Assign Project'),
+                            ),
+                          ),
                         if (_desktopGateway != null)
                           const PopupMenuItem(
                             value: 'rename',

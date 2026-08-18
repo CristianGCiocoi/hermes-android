@@ -4,15 +4,27 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'core/services/connection_manager.dart';
+import 'core/services/appearance_preference.dart';
 import 'core/services/gateway_turn_application_controller.dart';
 import 'core/services/text_size_preference.dart';
 import 'core/screens/session_list_screen.dart';
 import 'core/utils/responsive.dart';
 
+String? desktopGatewayUrlForConnectionSave(
+  String value, {
+  required bool isEditing,
+}) {
+  final normalized = value.trim();
+  return isEditing ? normalized : (normalized.isEmpty ? null : normalized);
+}
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final prefs = await SharedPreferences.getInstance();
-  final connManager = await ConnectionManager.create(prefs);
+  final connManager = await ConnectionManager.create(
+    prefs,
+    metadataStore: SharedPreferencesAsyncConnectionMetadataStore(),
+  );
   runApp(HermesApp(connManager: connManager));
 }
 
@@ -50,6 +62,10 @@ class HermesApp extends StatefulWidget {
   static TextSizePreference getTextSizePreference(SharedPreferences prefs) {
     return TextSizePreferenceStore(prefs).read();
   }
+
+  static AppearancePreference getAppearancePreference(SharedPreferences prefs) {
+    return AppearancePreferenceStore(prefs).read();
+  }
 }
 
 class HermesAppState extends State<HermesApp> {
@@ -66,58 +82,63 @@ class HermesAppState extends State<HermesApp> {
     if (mounted) setState(() {});
   }
 
+  Future<void> setAppearancePreference(AppearancePreference preference) async {
+    await AppearancePreferenceStore(widget.connManager.prefs).save(preference);
+    if (mounted) setState(() {});
+  }
+
+  ThemeData _buildTheme({
+    required Brightness brightness,
+    required AppearancePreference appearance,
+  }) {
+    final dark = brightness == Brightness.dark;
+    final scheme = ColorScheme.fromSeed(
+      seedColor: appearance.palette.seed,
+      brightness: brightness,
+      contrastLevel: appearance.highContrast ? 1 : 0,
+    );
+    return ThemeData(
+      colorScheme: scheme,
+      brightness: brightness,
+      useMaterial3: true,
+      scaffoldBackgroundColor: dark ? Colors.black : const Color(0xFFFAFAFA),
+      appBarTheme: AppBarTheme(
+        backgroundColor: dark ? Colors.black : Colors.white,
+        elevation: 0,
+        centerTitle: true,
+      ),
+      cardTheme: CardThemeData(
+        color: dark ? const Color(0xFF1A1A1A) : Colors.white,
+        elevation: 0,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+          side: BorderSide(
+            color: (dark ? Colors.white : Colors.grey).withValues(
+              alpha: dark ? 0.05 : 0.15,
+            ),
+          ),
+        ),
+      ),
+      floatingActionButtonTheme: FloatingActionButtonThemeData(
+        backgroundColor: scheme.primary,
+        foregroundColor: scheme.onPrimary,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    const gold = Color(0xFFD4AF37);
+    final appearance = HermesApp.getAppearancePreference(
+      widget.connManager.prefs,
+    );
 
     return MaterialApp(
       title: 'Hermes Agent',
       themeMode: HermesApp.getThemeMode(widget.connManager.prefs),
-      theme: ThemeData(
-        colorSchemeSeed: gold,
-        brightness: Brightness.light,
-        useMaterial3: true,
-        scaffoldBackgroundColor: const Color(0xFFFAFAFA),
-        appBarTheme: const AppBarTheme(
-          backgroundColor: Colors.white,
-          elevation: 0,
-          centerTitle: true,
-        ),
-        cardTheme: CardThemeData(
-          color: Colors.white,
-          elevation: 0,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
-            side: BorderSide(color: Colors.grey.withValues(alpha: 0.15)),
-          ),
-        ),
-        floatingActionButtonTheme: const FloatingActionButtonThemeData(
-          backgroundColor: gold,
-          foregroundColor: Colors.white,
-        ),
-      ),
-      darkTheme: ThemeData(
-        colorSchemeSeed: gold,
+      theme: _buildTheme(brightness: Brightness.light, appearance: appearance),
+      darkTheme: _buildTheme(
         brightness: Brightness.dark,
-        useMaterial3: true,
-        scaffoldBackgroundColor: Colors.black,
-        appBarTheme: const AppBarTheme(
-          backgroundColor: Colors.black,
-          elevation: 0,
-          centerTitle: true,
-        ),
-        cardTheme: CardThemeData(
-          color: const Color(0xFF1A1A1A),
-          elevation: 0,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
-            side: BorderSide(color: Colors.white.withValues(alpha: 0.05)),
-          ),
-        ),
-        floatingActionButtonTheme: const FloatingActionButtonThemeData(
-          backgroundColor: gold,
-          foregroundColor: Colors.black,
-        ),
+        appearance: appearance,
       ),
       builder: (context, child) {
         final systemMediaQuery = MediaQuery.of(context);
@@ -216,15 +237,15 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _closeDialogAndRefresh(BuildContext dialogContext) async {
     // Let editable controls detach from the IME before removing their route.
-    // Rebuilding HomeScreen while the dialog still owns focus can deactivate
-    // inherited dependencies out of order on Android.
+    // Rebuilding HomeScreen while the dialog still owns focus, or while its
+    // reverse transition still retains inherited dependencies, can deactivate
+    // those dependencies out of order on Android.
     FocusManager.instance.primaryFocus?.unfocus();
     await WidgetsBinding.instance.endOfFrame;
     if (!dialogContext.mounted) return;
     Navigator.of(dialogContext).pop();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _refresh();
-    });
+    await Future<void>.delayed(kThemeAnimationDuration);
+    if (mounted) _refresh();
   }
 
   @override
@@ -283,6 +304,7 @@ class _HomeScreenState extends State<HomeScreen> {
               port,
               apiKey, {
               gatewayPrefix,
+              atlasOwnerEnabled = false,
               dashboardPrefix,
               dashboardProxied = false,
               desktopGatewayUrl,
@@ -297,6 +319,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   port,
                   apiKey,
                   gatewayPrefix: gatewayPrefix,
+                  atlasOwnerEnabled: atlasOwnerEnabled,
                   dashboardPrefix: dashboardPrefix,
                   dashboardProxied: dashboardProxied,
                   desktopGatewayUrl: desktopGatewayUrl,
@@ -312,6 +335,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   port,
                   apiKey,
                   gatewayPrefix: gatewayPrefix,
+                  atlasOwnerEnabled: atlasOwnerEnabled,
                   dashboardPrefix: dashboardPrefix,
                   dashboardProxied: dashboardProxied,
                   desktopGatewayUrl: desktopGatewayUrl,
@@ -686,7 +710,10 @@ class _HomeScreenState extends State<HomeScreen> {
           ],
         ),
       ),
-    ).whenComplete(() {
+    ).whenComplete(() async {
+      // showDialog completes when pop is requested, before the reverse route
+      // transition has necessarily released its editable descendants.
+      await Future<void>.delayed(kThemeAnimationDuration);
       gatewayPrefixCtrl.dispose();
       dashboardPrefixCtrl.dispose();
       portCtrl.dispose();
@@ -823,6 +850,7 @@ class _AddDialog extends StatefulWidget {
     int port,
     String apiKey, {
     String? gatewayPrefix,
+    bool atlasOwnerEnabled,
     String? dashboardPrefix,
     bool dashboardProxied,
     String? desktopGatewayUrl,
@@ -850,6 +878,7 @@ class _AddDialogState extends State<_AddDialog> {
   late final TextEditingController _desktopGatewayUrl;
   late bool _showDashboard;
   late bool _dashboardProxied;
+  late bool _atlasOwnerEnabled;
   bool _validating = false;
   String? _error;
 
@@ -877,9 +906,10 @@ class _AddDialogState extends State<_AddDialog> {
     _dashUser = TextEditingController(text: conn?.dashboardUsername ?? '');
     _dashPass = TextEditingController(text: conn?.dashboardPassword ?? '');
     _desktopGatewayUrl = TextEditingController(
-      text: conn?.desktopGatewayUrl ?? 'http://192.168.1.193/desktop',
+      text: conn?.desktopGatewayUrl ?? '',
     );
     _dashboardProxied = conn?.dashboardProxied ?? false;
+    _atlasOwnerEnabled = conn?.atlasOwnerEnabled ?? false;
     _showDashboard =
         conn?.gatewayPrefix?.isNotEmpty == true ||
         conn?.dashboardPrefix?.isNotEmpty == true ||
@@ -899,6 +929,14 @@ class _AddDialogState extends State<_AddDialog> {
     final dashboardPrefix = _dashboardPrefix.text.trim();
 
     if (label.isEmpty || host.isEmpty || port <= 0) return;
+    if (_atlasOwnerEnabled && !isAtlasOwnerGatewayPrefix(gatewayPrefix)) {
+      setState(() {
+        _error =
+            'ATLAS owner enrichment requires the default Organizator route '
+            'or one exact Profile path such as /personal.';
+      });
+      return;
+    }
 
     setState(() {
       _validating = true;
@@ -990,9 +1028,17 @@ class _AddDialogState extends State<_AddDialog> {
         port,
         apiKey,
         gatewayPrefix: gatewayPrefix.isEmpty ? null : gatewayPrefix,
+        atlasOwnerEnabled: _atlasOwnerEnabled,
         dashboardPrefix: dashboardPrefix.isEmpty ? null : dashboardPrefix,
         dashboardProxied: _dashboardProxied,
-        desktopGatewayUrl: desktopGatewayUrl.isEmpty ? null : desktopGatewayUrl,
+        // Preserve an explicit empty value while editing: updateConnection
+        // uses it as the clear sentinel. Converting it to null here would mean
+        // "leave the existing Desktop gateway unchanged" and generic Hermes
+        // would remain coupled to a stale optional transport after save.
+        desktopGatewayUrl: desktopGatewayUrlForConnectionSave(
+          desktopGatewayUrl,
+          isEditing: _isEditing,
+        ),
         dashboardPort: dashPort,
         dashboardUsername: dashUser.isEmpty ? null : dashUser,
         dashboardPassword: dashPass.isEmpty ? null : dashPass,
@@ -1113,10 +1159,21 @@ class _AddDialogState extends State<_AddDialog> {
                 controller: _gatewayPrefix,
                 decoration: const InputDecoration(
                   labelText: 'Gateway path prefix',
-                  hintText:
-                      'e.g. /profile/peter (proxy path before /api/ and /v1/)',
+                  hintText: 'e.g. /personal (blank uses default Organizator)',
                 ),
                 autocorrect: false,
+              ),
+              SwitchListTile(
+                value: _atlasOwnerEnabled,
+                contentPadding: EdgeInsets.zero,
+                title: const Text('ATLAS owner enrichment'),
+                subtitle: const Text(
+                  'Optional. Generic Hermes remains the default; the server '
+                  'still authenticates and owns Profile and Project state.',
+                ),
+                onChanged: _validating
+                    ? null
+                    : (value) => setState(() => _atlasOwnerEnabled = value),
               ),
               const SizedBox(height: 12),
               TextField(

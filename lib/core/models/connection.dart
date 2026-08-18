@@ -1,4 +1,9 @@
 /// Connection model for remote Hermes Gateway API Server.
+bool isAtlasOwnerGatewayPrefix(String? value) =>
+    value == null ||
+    value.isEmpty ||
+    RegExp(r'^/[a-z][a-z0-9_-]{1,63}$').hasMatch(value);
+
 class NormalizedConnectionHost {
   final String host;
   final int port;
@@ -19,6 +24,7 @@ class SavedConnection {
   final String apiKey;
   final bool useHttps;
   final String? gatewayPrefix;
+  final bool atlasOwnerEnabled;
   final String? dashboardPrefix;
   final bool dashboardProxied;
 
@@ -47,6 +53,7 @@ class SavedConnection {
     required this.apiKey,
     this.useHttps = false,
     this.gatewayPrefix,
+    this.atlasOwnerEnabled = false,
     this.dashboardPrefix,
     this.dashboardProxied = false,
     this.desktopGatewayUrl,
@@ -143,6 +150,9 @@ class SavedConnection {
     if (gatewayPrefix != null && gatewayPrefix!.isNotEmpty) {
       m['gateway_prefix'] = gatewayPrefix;
     }
+    if (atlasOwnerEnabled) {
+      m['atlas_owner_enabled'] = true;
+    }
     if (dashboardPrefix != null && dashboardPrefix!.isNotEmpty) {
       m['dashboard_prefix'] = dashboardPrefix;
     }
@@ -164,6 +174,12 @@ class SavedConnection {
       return (s == null || s.isEmpty) ? null : s;
     }
 
+    final gatewayPrefix = nonEmpty(map['gateway_prefix']);
+    final atlasOwnerEnabled = (map['atlas_owner_enabled'] as bool?) ?? false;
+    if (atlasOwnerEnabled && !isAtlasOwnerGatewayPrefix(gatewayPrefix)) {
+      throw const FormatException('ATLAS owner connection metadata is invalid');
+    }
+
     return SavedConnection(
       id: map['id'] as String,
       label: map['label'] as String,
@@ -173,7 +189,8 @@ class SavedConnection {
       // migrate existing installs before rewriting sanitized metadata.
       apiKey: (map['api_key'] as String?) ?? '',
       useHttps: (map['use_https'] as bool?) ?? false,
-      gatewayPrefix: map['gateway_prefix'] as String?,
+      gatewayPrefix: gatewayPrefix,
+      atlasOwnerEnabled: atlasOwnerEnabled,
       dashboardPrefix: map['dashboard_prefix'] as String?,
       dashboardProxied: (map['dashboard_proxied'] as bool?) ?? false,
       desktopGatewayUrl: nonEmpty(map['desktop_gateway_url']),
@@ -193,6 +210,7 @@ class SavedConnection {
     String? apiKey,
     bool? useHttps,
     String? gatewayPrefix,
+    bool? atlasOwnerEnabled,
     String? dashboardPrefix,
     bool? dashboardProxied,
     String? desktopGatewayUrl,
@@ -216,6 +234,7 @@ class SavedConnection {
       gatewayPrefix: clearGatewayPrefix
           ? null
           : (gatewayPrefix ?? this.gatewayPrefix),
+      atlasOwnerEnabled: atlasOwnerEnabled ?? this.atlasOwnerEnabled,
       dashboardPrefix: clearDashboardPrefix
           ? null
           : (dashboardPrefix ?? this.dashboardPrefix),

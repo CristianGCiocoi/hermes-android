@@ -179,10 +179,16 @@ void main() {
             },
       );
 
+      expect(find.text('Legacy transport • recovery off'), findsOneWidget);
+      await tester.tap(find.text('Legacy transport • recovery off'));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('activity-legacy-status')), findsOneWidget);
       expect(
-        find.text('Background recovery unavailable — legacy transport'),
+        find.text('Background recovery is unavailable for this Gateway.'),
         findsOneWidget,
       );
+      await tester.tap(find.byTooltip('Close activity'));
+      await tester.pumpAndSettle();
       await tester.enterText(find.byType(TextField), 'Legacy once');
       await tester.tap(find.byTooltip('Send'));
       await tester.pumpAndSettle();
@@ -190,10 +196,7 @@ void main() {
       expect(legacySubmitCount, 1);
       expect(session.submitCount, 0);
       expect(session.stageCount, 0);
-      expect(
-        find.text('Background recovery unavailable — legacy transport'),
-        findsOneWidget,
-      );
+      expect(find.text('Legacy transport • recovery off'), findsOneWidget);
     },
   );
 
@@ -224,10 +227,7 @@ void main() {
               },
         );
 
-        expect(
-          find.text('Background recovery unavailable — legacy transport'),
-          findsNothing,
-        );
+        expect(find.text('Legacy transport • recovery off'), findsNothing);
         expect(
           tester
               .widget<IconButton>(find.widgetWithIcon(IconButton, Icons.send))

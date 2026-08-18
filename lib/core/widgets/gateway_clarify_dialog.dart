@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../models/gateway_clarify.dart';
+import '../models/gateway_interaction_mode.dart';
 
 typedef ClarifyResponder = Future<void> Function(String answer);
 
@@ -85,10 +86,16 @@ class _GatewayClarifyDialogState extends State<GatewayClarifyDialog> {
     final theme = Theme.of(context);
     final request = widget.request;
     final answer = _answer;
+    final interactionMode = request.interactionMode;
 
     return AlertDialog(
       icon: const Icon(Icons.help_outline_rounded),
-      title: const Text('Hermes needs your input'),
+      title: Text(
+        interactionMode == null ||
+                interactionMode == GatewayInteractionMode.standard
+            ? 'Hermes needs your input'
+            : '${interactionMode.label} question ${request.interactionStep}',
+      ),
       content: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 560, maxHeight: 620),
         child: SingleChildScrollView(
@@ -96,6 +103,18 @@ class _GatewayClarifyDialogState extends State<GatewayClarifyDialog> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              if (interactionMode != null &&
+                  interactionMode != GatewayInteractionMode.standard) ...[
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Chip(
+                    key: const Key('clarify-interaction-mode'),
+                    avatar: const Icon(Icons.forum_outlined, size: 18),
+                    label: Text(interactionMode.label),
+                  ),
+                ),
+                const SizedBox(height: 8),
+              ],
               SelectableText(
                 request.question,
                 key: const Key('clarify-question'),

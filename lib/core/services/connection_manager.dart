@@ -27,6 +27,52 @@ abstract interface class CredentialStore {
   Future<void> delete(String key);
 }
 
+/// Durable store for non-secret connection metadata.
+///
+/// The legacy [SharedPreferences] cache is retained for synchronous UI callers
+/// and migration from already-installed HermesApk versions. New Android writes
+/// use [SharedPreferencesAsync], whose DataStore backend provides a durable
+/// process-restart boundary rather than relying on the legacy in-memory cache.
+abstract interface class ConnectionMetadataStore {
+  Future<List<String>?> read();
+
+  Future<void> write(List<String> encodedConnections);
+}
+
+class SharedPreferencesAsyncConnectionMetadataStore
+    implements ConnectionMetadataStore {
+  static const String _key = 'saved_connections';
+
+  final SharedPreferencesAsync _preferences;
+
+  SharedPreferencesAsyncConnectionMetadataStore({
+    SharedPreferencesAsync? preferences,
+  }) : _preferences = preferences ?? SharedPreferencesAsync();
+
+  @override
+  Future<List<String>?> read() => _preferences.getStringList(_key);
+
+  @override
+  Future<void> write(List<String> encodedConnections) async {
+    final expected = List<String>.unmodifiable(encodedConnections);
+    await _preferences.setStringList(_key, expected);
+    final readBack = await _preferences.getStringList(_key);
+    if (!_sameStrings(readBack, expected)) {
+      throw const CredentialStorageException(
+        'Connection metadata could not be verified safely.',
+      );
+    }
+  }
+
+  static bool _sameStrings(List<String>? left, List<String> right) {
+    if (left == null || left.length != right.length) return false;
+    for (var index = 0; index < right.length; index += 1) {
+      if (left[index] != right[index]) return false;
+    }
+    return true;
+  }
+}
+
 class FlutterSecureCredentialStore implements CredentialStore {
   static const AndroidOptions _androidOptions = AndroidOptions(
     resetOnError: false,
@@ -134,15 +180,26 @@ class ConnectionManager {
 
   final SharedPreferences prefs;
   final CredentialStore _credentialStore;
+  final ConnectionMetadataStore? _metadataStore;
+  List<Map<String, dynamic>>? _initializedConnectionMaps;
 
-  ConnectionManager(this.prefs, {CredentialStore? credentialStore})
-    : _credentialStore = credentialStore ?? _sharedCredentialStore;
+  ConnectionManager(
+    this.prefs, {
+    CredentialStore? credentialStore,
+    ConnectionMetadataStore? metadataStore,
+  }) : _credentialStore = credentialStore ?? _sharedCredentialStore,
+       _metadataStore = metadataStore;
 
   static Future<ConnectionManager> create(
     SharedPreferences prefs, {
     CredentialStore? credentialStore,
+    ConnectionMetadataStore? metadataStore,
   }) async {
-    final manager = ConnectionManager(prefs, credentialStore: credentialStore);
+    final manager = ConnectionManager(
+      prefs,
+      credentialStore: credentialStore,
+      metadataStore: metadataStore,
+    );
     await manager.initialize();
     return manager;
   }
@@ -153,7 +210,10 @@ class ConnectionManager {
   /// SharedPreferences list is sanitized only after all read-backs match, so a
   /// partial secure-store failure leaves every legacy profile retryable.
   Future<void> initialize() async {
-    final maps = _readConnectionMaps();
+    final durableValues = await _metadataStore?.read();
+    final maps = durableValues == null
+        ? _readConnectionMaps()
+        : _decodeConnectionValues(durableValues);
     final connections = _connectionsFromMaps(maps);
     final hasLegacyFields = maps.any(
       (map) =>
@@ -177,8 +237,14 @@ class ConnectionManager {
         }
       }
 
-      if (hasLegacyFields) {
+      if (hasLegacyFields ||
+          (_metadataStore != null &&
+              durableValues == null &&
+              maps.isNotEmpty)) {
         await _saveAll(connections);
+      } else {
+        _initializedConnectionMaps = maps;
+        await _refreshLegacyCache(connections);
       }
     } on CredentialStorageException {
       rethrow;
@@ -191,7 +257,7 @@ class ConnectionManager {
 
   List<SavedConnection> getConnections() {
     return _connectionsFromMaps(
-      _readConnectionMaps(),
+      _initializedConnectionMaps ?? _readConnectionMaps(),
     ).map(_hydrateFromCachedCredentials).toList();
   }
 
@@ -201,6 +267,7 @@ class ConnectionManager {
     int port,
     String apiKey, {
     String? gatewayPrefix,
+    bool atlasOwnerEnabled = false,
     String? dashboardPrefix,
     bool dashboardProxied = false,
     String? desktopGatewayUrl,
@@ -208,6 +275,10 @@ class ConnectionManager {
     String? dashboardUsername,
     String? dashboardPassword,
   }) async {
+    final gateway = gatewayPrefix?.trim();
+    if (atlasOwnerEnabled && !isAtlasOwnerGatewayPrefix(gateway)) {
+      throw ArgumentError('ATLAS owner mode requires one exact Profile prefix');
+    }
     final normalized = SavedConnection.normalizeHostAndPort(host, port);
     final conn = SavedConnection(
       id: _uuid.v4(),
@@ -216,7 +287,8 @@ class ConnectionManager {
       port: normalized.port,
       apiKey: apiKey,
       useHttps: normalized.useHttps,
-      gatewayPrefix: gatewayPrefix,
+      gatewayPrefix: gateway,
+      atlasOwnerEnabled: atlasOwnerEnabled,
       dashboardPrefix: dashboardPrefix,
       dashboardProxied: dashboardProxied,
       desktopGatewayUrl: desktopGatewayUrl?.trim(),
@@ -246,6 +318,7 @@ class ConnectionManager {
     int port,
     String apiKey, {
     String? gatewayPrefix,
+    bool atlasOwnerEnabled = false,
     String? dashboardPrefix,
     bool dashboardProxied = false,
     String? desktopGatewayUrl,
@@ -263,6 +336,9 @@ class ConnectionManager {
 
     final normalized = SavedConnection.normalizeHostAndPort(host, port);
     final gateway = gatewayPrefix?.trim();
+    if (atlasOwnerEnabled && !isAtlasOwnerGatewayPrefix(gateway)) {
+      throw ArgumentError('ATLAS owner mode requires one exact Profile prefix');
+    }
     final dashboard = dashboardPrefix?.trim();
     final dashUser = dashboardUsername?.trim();
     final dashPass = dashboardPassword?.trim();
@@ -275,6 +351,7 @@ class ConnectionManager {
       apiKey: apiKey,
       useHttps: normalized.useHttps,
       gatewayPrefix: gateway == null || gateway.isEmpty ? null : gateway,
+      atlasOwnerEnabled: atlasOwnerEnabled,
       clearGatewayPrefix: gateway != null && gateway.isEmpty,
       dashboardPrefix: dashboard == null || dashboard.isEmpty
           ? null
@@ -321,6 +398,13 @@ class ConnectionManager {
     final p = password.trim();
     final gateway = gatewayPrefix?.trim();
     final dashboard = dashboardPrefix?.trim();
+    final ownerGateway = gatewayPrefix == null
+        ? current[idx].gatewayPrefix
+        : gateway;
+    if (current[idx].atlasOwnerEnabled &&
+        !isAtlasOwnerGatewayPrefix(ownerGateway)) {
+      throw ArgumentError('ATLAS owner mode requires one exact Profile prefix');
+    }
     current[idx] = current[idx].copyWith(
       gatewayPrefix: gateway == null || gateway.isEmpty ? null : gateway,
       clearGatewayPrefix: gateway != null && gateway.isEmpty,
@@ -382,7 +466,17 @@ class ConnectionManager {
   List<Map<String, dynamic>> _readConnectionMaps() {
     try {
       final jsonList = prefs.getStringList(_key) ?? const <String>[];
-      return jsonList
+      return _decodeConnectionValues(jsonList);
+    } catch (_) {
+      throw const CredentialStorageException(
+        'Saved connection metadata could not be read safely.',
+      );
+    }
+  }
+
+  List<Map<String, dynamic>> _decodeConnectionValues(List<String> values) {
+    try {
+      return values
           .map((json) => jsonDecode(json) as Map<String, dynamic>)
           .toList();
     } catch (_) {
@@ -463,21 +557,38 @@ class ConnectionManager {
 
   Future<void> _saveAll(List<SavedConnection> list) async {
     try {
-      final saved = await prefs.setStringList(
-        _key,
-        list.map((connection) => jsonEncode(connection.toMap())).toList(),
-      );
-      if (!saved) {
+      final encoded = list
+          .map((connection) => jsonEncode(connection.toMap()))
+          .toList();
+      await _metadataStore?.write(encoded);
+      final saved = await prefs.setStringList(_key, encoded);
+      if (_metadataStore == null && !saved) {
         throw const CredentialStorageException(
           'Connection metadata could not be saved safely.',
         );
       }
+      _initializedConnectionMaps = _decodeConnectionValues(encoded);
     } on CredentialStorageException {
       rethrow;
     } catch (_) {
       throw const CredentialStorageException(
         'Connection metadata could not be saved safely.',
       );
+    }
+  }
+
+  Future<void> _refreshLegacyCache(List<SavedConnection> list) async {
+    final encoded = list
+        .map((connection) => jsonEncode(connection.toMap()))
+        .toList();
+    try {
+      // This keeps synchronous compatibility callers in the same process
+      // hydrated. The async store remains authoritative if this legacy write
+      // is unavailable on a device.
+      await prefs.setStringList(_key, encoded);
+    } catch (_) {
+      // The durable async read has already succeeded. Never make startup depend
+      // on a best-effort legacy-cache refresh.
     }
   }
 
