@@ -4,6 +4,32 @@ All notable changes to this project are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Release notes for
 versions prior to 1.0.7 are in the **What's new** sections of the [README](README.md).
 
+## [1.0.25-hermesapk.25] - 2026-08-18
+
+### Added
+
+- Optional per-chat `Standard`, `Interview`, and `Grill` interaction modes,
+  negotiated through an exact versioned Hermes Gateway capability.
+- Server-owned one-question-at-a-time Interview and Grill clarification labels,
+  including the current question step in the existing clarification dialog.
+
+### Compatibility and safety
+
+- Generic and older Gateways remain fully supported in Standard mode. If the
+  capability is absent or malformed, Android sends no `interaction_mode.get`
+  or `interaction_mode.set` request.
+- Mode changes are session-scoped, revision-bound, refused while a turn is
+  active, persisted by Hermes, and accepted by Android only when the RPC receipt
+  exactly matches the subsequent `session.info` readback.
+- Android does not prefix user messages or simulate Interview/Grill locally.
+
+### Validation
+
+- Flutter static analysis passes with zero issues.
+- All 388 Flutter tests pass, including adversarial capability/receipt parsing,
+  generic-Gateway zero-mode-RPC compatibility, session readback, and existing
+  clarification regressions.
+
 ## [1.0.24-hermesapk.24] - 2026-08-18
 
 ### Added

@@ -29,6 +29,7 @@ import '../models/gateway_activity.dart';
 import '../models/gateway_approval.dart';
 import '../models/gateway_clarify.dart';
 import '../models/gateway_insight.dart';
+import '../models/gateway_interaction_mode.dart';
 import '../models/gateway_sensitive_prompt.dart';
 import '../models/gateway_turn_contract.dart';
 import '../utils/chat_history_scroll.dart';
@@ -195,6 +196,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   bool _changingModel = false;
   bool? _effectiveFullControl;
   bool _changingPermission = false;
+  GatewayInteractionModeState? _interactionModeState;
+  bool _changingInteractionMode = false;
   bool _sending = false;
   bool _streaming = false;
   _ResponseTransport _activeResponseTransport = _ResponseTransport.none;
@@ -285,12 +288,17 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
             _desktopConnectionState = state;
             if (state != DesktopConnectionState.connected) {
               _effectiveFullControl = null;
+              _interactionModeState = null;
             }
           });
         });
         _desktopGateway!.setSessionPermissionListener((sessionId, enabled) {
           if (!mounted || sessionId != widget.session.id) return;
           setState(() => _effectiveFullControl = enabled);
+        });
+        _desktopGateway!.setInteractionModeListener((sessionId, state) {
+          if (!mounted || sessionId != widget.session.id) return;
+          setState(() => _interactionModeState = state);
         });
         unawaited(_ensureDesktopSession());
       } on ArgumentError {
@@ -359,6 +367,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     );
     _desktopGateway?.setAsyncEventListener(null);
     _desktopGateway?.setSessionPermissionListener(null);
+    _desktopGateway?.setInteractionModeListener(null);
     _desktopGateway?.close();
     _textController.dispose();
     _scrollController.removeListener(_onScroll);
@@ -391,8 +400,14 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     if (gateway == null) return;
     try {
       final effective = await gateway.ensureSession(widget.session.id);
-      if (mounted && effective != null) {
-        setState(() => _effectiveFullControl = effective);
+      final interaction = await gateway.getInteractionModeState(
+        sessionId: widget.session.id,
+      );
+      if (mounted) {
+        setState(() {
+          if (effective != null) _effectiveFullControl = effective;
+          _interactionModeState = interaction;
+        });
       }
     } catch (_) {
       // The composer remains available. The next send retries with a fresh
@@ -1477,6 +1492,104 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       );
     } finally {
       if (mounted) setState(() => _loadingModelOptions = false);
+    }
+  }
+
+  Future<void> _showInteractionModeSelector() async {
+    final state = _interactionModeState;
+    final desktopGateway = _desktopGateway;
+    if (desktopGateway == null || state == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Hermes interaction mode is still loading.'),
+        ),
+      );
+      return;
+    }
+    if (!state.supported) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'This Gateway supports Standard mode only. Interview and Grill require an upgraded Hermes Gateway.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    final selection = await showModalBottomSheet<GatewayInteractionMode>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const ListTile(
+              leading: Icon(Icons.forum_outlined),
+              title: Text('Conversation style'),
+              subtitle: Text(
+                'Interview and Grill ask one question at a time through the Gateway.',
+              ),
+            ),
+            for (final mode in GatewayInteractionMode.values)
+              ListTile(
+                key: Key('interaction-mode-${mode.wireValue}'),
+                leading: Icon(
+                  state.mode == mode
+                      ? Icons.check_circle
+                      : switch (mode) {
+                          GatewayInteractionMode.standard =>
+                            Icons.chat_bubble_outline,
+                          GatewayInteractionMode.interview =>
+                            Icons.question_answer_outlined,
+                          GatewayInteractionMode.grill =>
+                            Icons.fact_check_outlined,
+                        },
+                ),
+                title: Text(mode.label),
+                subtitle: Text(mode.description),
+                onTap: () => Navigator.pop(sheetContext, mode),
+              ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+    if (selection == null || selection == state.mode || !mounted) return;
+    await _setInteractionMode(selection);
+  }
+
+  Future<void> _setInteractionMode(GatewayInteractionMode mode) async {
+    final gateway = _desktopGateway;
+    final current = _interactionModeState;
+    if (gateway == null ||
+        current == null ||
+        !current.supported ||
+        _changingInteractionMode) {
+      return;
+    }
+    setState(() => _changingInteractionMode = true);
+    try {
+      final state = await gateway.setInteractionMode(
+        sessionId: widget.session.id,
+        mode: mode,
+        expectedRevision: current.revision,
+      );
+      if (!mounted) return;
+      setState(() => _interactionModeState = state);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('${state.mode.label} mode is active for this chat.'),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Conversation style was not changed: $error')),
+      );
+      unawaited(_ensureDesktopSession());
+    } finally {
+      if (mounted) setState(() => _changingInteractionMode = false);
     }
   }
 
@@ -3042,6 +3155,68 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                           ),
                         ),
                       ),
+                    ),
+                  ),
+                  Semantics(
+                    label: 'Choose conversation style',
+                    value:
+                        _interactionModeState?.mode.label ?? 'Checking server',
+                    button: true,
+                    enabled:
+                        !(_sending ||
+                            _streaming ||
+                            _changingInteractionMode ||
+                            _interactionModeState == null),
+                    excludeSemantics: true,
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(minHeight: 48),
+                      child:
+                          MediaQuery.textScalerOf(context).scale(1) >= 1.5 ||
+                              MediaQuery.sizeOf(context).width < 390
+                          ? IconButton(
+                              key: const Key('chat-interaction-mode-selector'),
+                              tooltip:
+                                  _interactionModeState?.mode.label ??
+                                  'Conversation style',
+                              onPressed:
+                                  (_sending ||
+                                      _streaming ||
+                                      _changingInteractionMode ||
+                                      _interactionModeState == null)
+                                  ? null
+                                  : _showInteractionModeSelector,
+                              icon: _changingInteractionMode
+                                  ? const SizedBox(
+                                      width: 16,
+                                      height: 16,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                      ),
+                                    )
+                                  : const Icon(Icons.forum_outlined),
+                            )
+                          : TextButton.icon(
+                              key: const Key('chat-interaction-mode-selector'),
+                              onPressed:
+                                  (_sending ||
+                                      _streaming ||
+                                      _changingInteractionMode ||
+                                      _interactionModeState == null)
+                                  ? null
+                                  : _showInteractionModeSelector,
+                              icon: _changingInteractionMode
+                                  ? const SizedBox(
+                                      width: 16,
+                                      height: 16,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                      ),
+                                    )
+                                  : const Icon(Icons.forum_outlined, size: 18),
+                              label: Text(
+                                _interactionModeState?.mode.label ?? 'Mode',
+                              ),
+                            ),
                     ),
                   ),
                   Semantics(

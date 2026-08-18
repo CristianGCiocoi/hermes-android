@@ -9,6 +9,8 @@ import 'dart:convert';
 import 'package:crypto/crypto.dart';
 import 'package:web_socket_channel/io.dart';
 
+import '../models/gateway_interaction_mode.dart';
+
 Object? _deepFreezeJson(Object? value) {
   if (value is Map) {
     final copy = <String, dynamic>{};
@@ -1503,6 +1505,86 @@ class WsClient {
       );
     }
     return enabled;
+  }
+
+  Future<GatewayInteractionModeReceipt> getInteractionMode({
+    required String sessionId,
+  }) async {
+    final response = await send('interaction_mode.get', {
+      'session_id': sessionId,
+    });
+    final error = response['error'];
+    if (error != null) {
+      throw _gatewayResponseError(
+        'interaction_mode.get',
+        error,
+        fallbackMessage: 'Could not read the interaction mode',
+      );
+    }
+    final result = response['result'];
+    final rawRequested = result is Map<String, dynamic>
+        ? result['requested_mode']
+        : null;
+    final requested = gatewayInteractionModeFromWire(rawRequested);
+    if (requested == null) {
+      throw JsonRpcError(
+        'interaction_mode.get',
+        'Gateway returned an invalid interaction mode receipt',
+      );
+    }
+    final receipt = GatewayInteractionModeReceipt.fromResult(
+      result,
+      expectedSessionId: sessionId,
+      expectedRequestedMode: requested,
+    );
+    if (receipt == null || receipt.requestedMode != receipt.effectiveMode) {
+      throw JsonRpcError(
+        'interaction_mode.get',
+        'Gateway returned an invalid interaction mode receipt',
+      );
+    }
+    return receipt;
+  }
+
+  Future<GatewayInteractionModeReceipt> setInteractionMode({
+    required String sessionId,
+    required GatewayInteractionMode mode,
+    required int expectedRevision,
+  }) async {
+    if (expectedRevision < 0) {
+      throw ArgumentError.value(
+        expectedRevision,
+        'expectedRevision',
+        'Interaction mode revision must not be negative',
+      );
+    }
+    final response = await send('interaction_mode.set', {
+      'session_id': sessionId,
+      'mode': mode.wireValue,
+      'expected_revision': expectedRevision,
+    });
+    final error = response['error'];
+    if (error != null) {
+      throw _gatewayResponseError(
+        'interaction_mode.set',
+        error,
+        fallbackMessage: 'Interaction mode switch failed',
+      );
+    }
+    final receipt = GatewayInteractionModeReceipt.fromResult(
+      response['result'],
+      expectedSessionId: sessionId,
+      expectedRequestedMode: mode,
+    );
+    if (receipt == null ||
+        (receipt.revision != expectedRevision &&
+            receipt.revision != expectedRevision + 1)) {
+      throw JsonRpcError(
+        'interaction_mode.set',
+        'Gateway returned an invalid interaction mode receipt',
+      );
+    }
+    return receipt;
   }
 
   static const validReasoningEfforts = <String>{

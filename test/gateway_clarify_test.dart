@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hermes_android/core/models/gateway_clarify.dart';
+import 'package:hermes_android/core/models/gateway_interaction_mode.dart';
 import 'package:hermes_android/core/widgets/gateway_clarify_dialog.dart';
 
 void main() {
@@ -54,9 +55,56 @@ void main() {
         isNull,
       );
     });
+
+    test('accepts only complete interaction-mode question metadata', () {
+      final interview = GatewayClarifyRequest.fromEventData({
+        'request_id': 'clarify-interview',
+        'question': 'What outcome matters most?',
+        'interaction_mode': 'interview',
+        'interaction_mode_revision': 2,
+        'interaction_step': 3,
+      });
+      final partial = GatewayClarifyRequest.fromEventData({
+        'request_id': 'clarify-partial',
+        'question': 'Why?',
+        'interaction_mode': 'grill',
+        'interaction_step': 1,
+      });
+
+      expect(interview!.interactionMode, GatewayInteractionMode.interview);
+      expect(interview.interactionModeRevision, 2);
+      expect(interview.interactionStep, 3);
+      expect(partial!.interactionMode, isNull);
+      expect(partial.interactionModeRevision, isNull);
+      expect(partial.interactionStep, isNull);
+    });
   });
 
   group('GatewayClarifyDialog', () {
+    testWidgets('labels a server-owned Interview question and step', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: GatewayClarifyDialog(
+              request: GatewayClarifyRequest.fromEventData({
+                'request_id': 'clarify-interview',
+                'question': 'What outcome matters most?',
+                'interaction_mode': 'interview',
+                'interaction_mode_revision': 1,
+                'interaction_step': 2,
+              })!,
+              onRespond: (_) async {},
+            ),
+          ),
+        ),
+      );
+
+      expect(find.text('Interview question 2'), findsOneWidget);
+      expect(find.byKey(const Key('clarify-interaction-mode')), findsOneWidget);
+    });
+
     testWidgets('stages a choice and sends it only after Continue', (
       tester,
     ) async {

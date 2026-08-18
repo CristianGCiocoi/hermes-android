@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:crypto/crypto.dart';
 
+import '../models/gateway_interaction_mode.dart';
 import 'connection_manager.dart';
 import 'gateway_turn_coordinator.dart';
 import 'gateway_turn_journal.dart';
@@ -14,6 +15,8 @@ typedef DesktopConnectionCallback =
     void Function(DesktopConnectionState connectionState);
 typedef DesktopSessionPermissionCallback =
     void Function(String mobileSessionId, bool effectiveFullControl);
+typedef DesktopInteractionModeCallback =
+    void Function(String mobileSessionId, GatewayInteractionModeState state);
 
 enum DesktopConnectionState {
   disconnected,
@@ -36,9 +39,12 @@ class DesktopGatewayClient {
   WsClient? _ws;
   final Map<String, String> _gatewaySessionIds = {};
   final Map<String, bool> _effectiveFullControl = {};
+  final Map<String, GatewayInteractionModeState> _interactionModeStates = {};
+  GatewayInteractionModeCapability? _interactionModeCapability;
   DesktopAsyncEventCallback? _asyncEventListener;
   DesktopConnectionCallback? _connectionListener;
   DesktopSessionPermissionCallback? _sessionPermissionListener;
+  DesktopInteractionModeCallback? _interactionModeListener;
   GatewayTurnCoordinatorRegistry? _turnCoordinatorRegistry;
 
   static const _asyncEventTypes = {
@@ -135,6 +141,8 @@ class DesktopGatewayClient {
     existing?.close();
     _gatewaySessionIds.clear();
     _effectiveFullControl.clear();
+    _interactionModeStates.clear();
+    _interactionModeCapability = null;
     final ticket = await _dashboard.mintWebSocketTicket();
     final client = WsClient(_baseUrl, ticket: ticket);
     _installAsyncEventBridge(client);
@@ -144,6 +152,8 @@ class DesktopGatewayClient {
       } else if (identical(_ws, client)) {
         _gatewaySessionIds.clear();
         _effectiveFullControl.clear();
+        _interactionModeStates.clear();
+        _interactionModeCapability = null;
         _connectionListener?.call(DesktopConnectionState.disconnected);
       }
     };
@@ -212,6 +222,105 @@ class DesktopGatewayClient {
     DesktopSessionPermissionCallback? listener,
   ) {
     _sessionPermissionListener = listener;
+  }
+
+  void setInteractionModeListener(DesktopInteractionModeCallback? listener) {
+    _interactionModeListener = listener;
+  }
+
+  Future<GatewayInteractionModeState> getInteractionModeState({
+    required String sessionId,
+  }) async {
+    final gateway = await _connect(sessionId);
+    final capability = await _interactionCapabilityFor(gateway.client);
+    if (!capability.supported) {
+      const state = GatewayInteractionModeState.standardOnly();
+      _recordInteractionMode(sessionId, state);
+      return state;
+    }
+    final receipt = await gateway.client.getInteractionMode(
+      sessionId: gateway.sessionId,
+    );
+    final state = GatewayInteractionModeState(
+      supported: true,
+      mode: receipt.effectiveMode,
+      revision: receipt.revision,
+    );
+    _recordInteractionMode(sessionId, state);
+    return state;
+  }
+
+  Future<GatewayInteractionModeState> setInteractionMode({
+    required String sessionId,
+    required GatewayInteractionMode mode,
+    required int expectedRevision,
+  }) async {
+    final gateway = await _connect(sessionId);
+    final capability = await _interactionCapabilityFor(gateway.client);
+    if (!capability.supported) {
+      const state = GatewayInteractionModeState.standardOnly();
+      _recordInteractionMode(sessionId, state);
+      return state;
+    }
+    final current = _interactionModeStates[sessionId];
+    if (current != null &&
+        current.supported &&
+        current.mode == mode &&
+        current.revision == expectedRevision) {
+      return current;
+    }
+
+    final readback = Completer<GatewayInteractionModeState>();
+    void listener(StreamEvent event) {
+      if (event.type != 'session.info') return;
+      final state = GatewayInteractionModeState.fromSessionInfo(event.data);
+      if (state != null && !readback.isCompleted) readback.complete(state);
+    }
+
+    gateway.client.addSessionEventListener(gateway.sessionId, listener);
+    try {
+      final receipt = await gateway.client.setInteractionMode(
+        sessionId: gateway.sessionId,
+        mode: mode,
+        expectedRevision: expectedRevision,
+      );
+      if (receipt.revision != expectedRevision + 1) {
+        throw JsonRpcError(
+          'interaction_mode.set',
+          'Gateway did not advance the interaction mode revision',
+        );
+      }
+      final reported = await readback.future.timeout(
+        const Duration(seconds: 5),
+        onTimeout: () => throw JsonRpcError(
+          'session.info',
+          'Gateway did not confirm the effective interaction mode',
+        ),
+      );
+      if (reported.mode != receipt.effectiveMode ||
+          reported.revision != receipt.revision) {
+        throw JsonRpcError(
+          'session.info',
+          'Gateway interaction mode readback did not match its receipt',
+        );
+      }
+      _recordInteractionMode(sessionId, reported);
+      return reported;
+    } finally {
+      gateway.client.removeSessionEventListener(gateway.sessionId, listener);
+    }
+  }
+
+  Future<GatewayInteractionModeCapability> _interactionCapabilityFor(
+    WsClient client,
+  ) async {
+    final cached = _interactionModeCapability;
+    if (cached != null) return cached;
+    final capability = GatewayInteractionModeCapability.fromGatewayReady(
+      await client.waitForGatewayReady(),
+    );
+    _interactionModeCapability = capability;
+    return capability;
   }
 
   Future<RemoteFileAttachment> attachFile({
@@ -319,6 +428,12 @@ class DesktopGatewayClient {
         if (yolo is bool) {
           _recordEffectiveFullControl(mobileSessionId, yolo);
         }
+        final interaction = GatewayInteractionModeState.fromSessionInfo(
+          event.data,
+        );
+        if (interaction != null) {
+          _recordInteractionMode(mobileSessionId, interaction);
+        }
         return;
       }
       _asyncEventListener?.call(mobileSessionId, event);
@@ -328,6 +443,14 @@ class DesktopGatewayClient {
   void _recordEffectiveFullControl(String mobileSessionId, bool enabled) {
     _effectiveFullControl[mobileSessionId] = enabled;
     _sessionPermissionListener?.call(mobileSessionId, enabled);
+  }
+
+  void _recordInteractionMode(
+    String mobileSessionId,
+    GatewayInteractionModeState state,
+  ) {
+    _interactionModeStates[mobileSessionId] = state;
+    _interactionModeListener?.call(mobileSessionId, state);
   }
 
   /// Interrupts the active turn in the Desktop gateway runtime.
@@ -510,10 +633,13 @@ class DesktopGatewayClient {
     _asyncEventListener = null;
     _connectionListener = null;
     _sessionPermissionListener = null;
+    _interactionModeListener = null;
     _ws?.close();
     _ws = null;
     _gatewaySessionIds.clear();
     _effectiveFullControl.clear();
+    _interactionModeStates.clear();
+    _interactionModeCapability = null;
     final turnCoordinatorRegistry = _turnCoordinatorRegistry;
     _turnCoordinatorRegistry = null;
     if (turnCoordinatorRegistry != null) {
