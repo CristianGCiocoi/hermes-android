@@ -47,11 +47,13 @@ void main() {
       ),
     );
 
-    expect(find.byTooltip('Copy message'), findsOneWidget);
+    expect(find.byTooltip('Message actions'), findsOneWidget);
     expect(find.byType(SelectableText), findsWidgets);
 
-    await tester.tap(find.byTooltip('Copy message'));
-    await tester.pump();
+    await tester.tap(find.byTooltip('Message actions'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('message-action-copy')));
+    await tester.pumpAndSettle();
 
     final clipboard = await Clipboard.getData(Clipboard.kTextPlain);
     expect(clipboard?.text, message);
@@ -77,9 +79,11 @@ void main() {
       ),
     );
 
-    expect(find.byTooltip('Read aloud'), findsOneWidget);
-    await tester.tap(find.byTooltip('Read aloud'));
-    await tester.pump();
+    await tester.tap(find.byTooltip('Message actions'));
+    await tester.pumpAndSettle();
+    expect(find.text('Read aloud'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('message-action-read-aloud')));
+    await tester.pumpAndSettle();
     expect(readAloudCalls, 1);
   });
 
@@ -94,11 +98,14 @@ void main() {
       ),
     );
 
-    expect(find.byTooltip('Copy message'), findsOneWidget);
-    expect(find.byTooltip('Read aloud'), findsNothing);
+    await tester.tap(find.byTooltip('Message actions'));
+    await tester.pumpAndSettle();
+    expect(find.text('Copy'), findsOneWidget);
+    expect(find.text('Select text'), findsOneWidget);
+    expect(find.text('Read aloud'), findsNothing);
   });
 
-  testWidgets('message actions wrap and retain semantics at font scale 200%', (
+  testWidgets('message menu retains semantics at font scale 200%', (
     tester,
   ) async {
     tester.view.devicePixelRatio = 1;
@@ -121,6 +128,7 @@ void main() {
               content: 'A compact action layout.',
               isUser: false,
               onReadAloud: () async {},
+              onShare: () async {},
               onEdit: () {},
               onRetry: () async {},
             ),
@@ -128,28 +136,115 @@ void main() {
         ),
       );
 
+      expect(find.bySemanticsLabel('Message actions'), findsOneWidget);
+      expect(
+        tester.getSize(find.byKey(const Key('message-actions-button'))),
+        const Size(48, 48),
+      );
+      await tester.tap(find.byTooltip('Message actions'));
+      await tester.pumpAndSettle();
       for (final label in const [
-        'Copy message',
+        'Copy',
+        'Select text',
         'Read aloud',
+        'Share',
         'Edit and resend',
         'Regenerate response',
       ]) {
-        expect(find.bySemanticsLabel(label), findsOneWidget);
-      }
-      for (final icon in [
-        Icons.copy_outlined,
-        Icons.volume_up_outlined,
-        Icons.edit_outlined,
-        Icons.refresh,
-      ]) {
-        expect(
-          tester.getSize(find.widgetWithIcon(IconButton, icon)),
-          const Size(48, 48),
-        );
+        expect(find.text(label), findsOneWidget);
       }
       expect(tester.takeException(), isNull);
+      await tester.tapAt(const Offset(8, 8));
+      await tester.pumpAndSettle();
     }
     semantics.dispose();
+  });
+
+  testWidgets('select text opens a focused selectable surface', (tester) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(
+          body: MessageBubble(
+            content: 'Select **this exact** message.',
+            isUser: false,
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.byTooltip('Message actions'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('message-action-select-text')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('message-selectable-text')), findsOneWidget);
+    expect(find.text('Copy all'), findsOneWidget);
+    expect(find.text('Select **this exact** message.'), findsOneWidget);
+  });
+
+  testWidgets('share action uses the injected per-message callback', (
+    tester,
+  ) async {
+    var shareCalls = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: MessageBubble(
+            content: 'Share this response.',
+            isUser: false,
+            onShare: () async => shareCalls++,
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.byTooltip('Message actions'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('message-action-share')));
+    await tester.pumpAndSettle();
+
+    expect(shareCalls, 1);
+  });
+
+  testWidgets('role-specific edit and regenerate actions route once', (
+    tester,
+  ) async {
+    var editCalls = 0;
+    var regenerateCalls = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Column(
+            children: [
+              MessageBubble(
+                content: 'User prompt',
+                isUser: true,
+                onEdit: () => editCalls++,
+              ),
+              MessageBubble(
+                content: 'Hermes response',
+                isUser: false,
+                onRetry: () async => regenerateCalls++,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.byTooltip('Message actions').first);
+    await tester.pumpAndSettle();
+    expect(find.text('Regenerate response'), findsNothing);
+    await tester.tap(find.byKey(const Key('message-action-edit')));
+    await tester.pumpAndSettle();
+    expect(editCalls, 1);
+
+    await tester.tap(find.byTooltip('Message actions').last);
+    await tester.pumpAndSettle();
+    expect(find.text('Edit and resend'), findsNothing);
+    await tester.tap(find.byKey(const Key('message-action-regenerate')));
+    await tester.pumpAndSettle();
+    expect(regenerateCalls, 1);
   });
 }
 

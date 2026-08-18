@@ -441,6 +441,14 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     );
   }
 
+  Future<void> _shareMessage(String text) async {
+    final message = text.trim();
+    if (message.isEmpty) return;
+    await SharePlus.instance.share(
+      ShareParams(subject: widget.session.title, text: message),
+    );
+  }
+
   Future<void> _initVoice({bool requestSpeechPermission = false}) async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -3505,6 +3513,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
               onReadAloud: isUser
                   ? null
                   : () => _readAssistantText(content, announce: true),
+              onShare: () => _shareMessage(content),
               onEdit: isUser ? () => _editAndResend(content) : null,
               onRetry: isUser
                   ? null
@@ -3543,6 +3552,7 @@ class MessageBubble extends StatelessWidget {
   final bool verbose;
   final Map<String, dynamic> metadata;
   final Future<void> Function()? onReadAloud;
+  final Future<void> Function()? onShare;
   final VoidCallback? onEdit;
   final Future<void> Function()? onRetry;
 
@@ -3553,6 +3563,7 @@ class MessageBubble extends StatelessWidget {
     this.verbose = false,
     this.metadata = const {},
     this.onReadAloud,
+    this.onShare,
     this.onEdit,
     this.onRetry,
   });
@@ -3570,6 +3581,149 @@ class MessageBubble extends StatelessWidget {
           duration: Duration(seconds: 2),
         ),
       );
+  }
+
+  Future<void> _showSelectableText(BuildContext context) {
+    return showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (sheetContext) => SafeArea(
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.sizeOf(sheetContext).height * 0.78,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.text_fields),
+                title: const Text('Select text'),
+                subtitle: Text(isUser ? 'Your message' : 'Hermes response'),
+              ),
+              const Divider(height: 1),
+              Flexible(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.all(20),
+                  child: SelectableText(
+                    content,
+                    key: const Key('message-selectable-text'),
+                  ),
+                ),
+              ),
+              const Divider(height: 1),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(sheetContext),
+                      child: const Text('Done'),
+                    ),
+                    const SizedBox(width: 8),
+                    FilledButton.icon(
+                      key: const Key('copy-all-message-text'),
+                      onPressed: () => _copyMessage(sheetContext),
+                      icon: const Icon(Icons.copy_outlined),
+                      label: const Text('Copy all'),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showMessageActions(BuildContext context) {
+    return showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (sheetContext) {
+        Future<void> run(FutureOr<void> Function() action) async {
+          Navigator.pop(sheetContext);
+          await Future<void>.delayed(Duration.zero);
+          if (!context.mounted) return;
+          await action();
+        }
+
+        final actions = <Widget>[
+          ListTile(
+            key: const Key('message-action-copy'),
+            leading: const Icon(Icons.copy_outlined),
+            title: const Text('Copy'),
+            onTap: () => unawaited(run(() => _copyMessage(context))),
+          ),
+          ListTile(
+            key: const Key('message-action-select-text'),
+            leading: const Icon(Icons.text_fields),
+            title: const Text('Select text'),
+            onTap: () => unawaited(run(() => _showSelectableText(context))),
+          ),
+          if (onReadAloud != null)
+            ListTile(
+              key: const Key('message-action-read-aloud'),
+              leading: const Icon(Icons.volume_up_outlined),
+              title: const Text('Read aloud'),
+              onTap: () => unawaited(run(onReadAloud!)),
+            ),
+          if (onShare != null)
+            ListTile(
+              key: const Key('message-action-share'),
+              leading: const Icon(Icons.share_outlined),
+              title: const Text('Share'),
+              onTap: () => unawaited(run(onShare!)),
+            ),
+          if (onEdit != null)
+            ListTile(
+              key: const Key('message-action-edit'),
+              leading: const Icon(Icons.edit_outlined),
+              title: const Text('Edit and resend'),
+              onTap: () => unawaited(run(onEdit!)),
+            ),
+          if (onRetry != null)
+            ListTile(
+              key: const Key('message-action-regenerate'),
+              leading: const Icon(Icons.refresh),
+              title: const Text('Regenerate response'),
+              subtitle: const Text('Uses the preceding prompt'),
+              onTap: () => unawaited(run(onRetry!)),
+            ),
+        ];
+
+        return SafeArea(
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxHeight: MediaQuery.sizeOf(sheetContext).height * 0.82,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ListTile(
+                  leading: const Icon(Icons.more_horiz),
+                  title: const Text('Message actions'),
+                  subtitle: Text(isUser ? 'Your message' : 'Hermes response'),
+                ),
+                const Divider(height: 1),
+                Flexible(
+                  child: SingleChildScrollView(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: actions,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
   }
 
   @override
@@ -3719,70 +3873,20 @@ class MessageBubble extends StatelessWidget {
           const SizedBox(height: 4),
           Align(
             alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
-            child: Wrap(
-              spacing: 0,
-              runSpacing: 0,
-              children: [
-                Semantics(
-                  label: 'Copy message',
-                  button: true,
-                  excludeSemantics: true,
-                  child: IconButton(
-                    icon: const Icon(Icons.copy_outlined, size: 19),
-                    tooltip: 'Copy message',
-                    onPressed: () => _copyMessage(context),
-                    constraints: const BoxConstraints.tightFor(
-                      width: 48,
-                      height: 48,
-                    ),
-                  ),
+            child: Semantics(
+              label: 'Message actions',
+              button: true,
+              excludeSemantics: true,
+              child: IconButton(
+                key: const Key('message-actions-button'),
+                icon: const Icon(Icons.more_horiz, size: 21),
+                tooltip: 'Message actions',
+                onPressed: () => _showMessageActions(context),
+                constraints: const BoxConstraints.tightFor(
+                  width: 48,
+                  height: 48,
                 ),
-                if (onReadAloud != null)
-                  Semantics(
-                    label: 'Read aloud',
-                    button: true,
-                    excludeSemantics: true,
-                    child: IconButton(
-                      icon: const Icon(Icons.volume_up_outlined, size: 20),
-                      tooltip: 'Read aloud',
-                      onPressed: onReadAloud,
-                      constraints: const BoxConstraints.tightFor(
-                        width: 48,
-                        height: 48,
-                      ),
-                    ),
-                  ),
-                if (onEdit != null)
-                  Semantics(
-                    label: 'Edit and resend',
-                    button: true,
-                    excludeSemantics: true,
-                    child: IconButton(
-                      icon: const Icon(Icons.edit_outlined, size: 20),
-                      tooltip: 'Edit and resend',
-                      onPressed: onEdit,
-                      constraints: const BoxConstraints.tightFor(
-                        width: 48,
-                        height: 48,
-                      ),
-                    ),
-                  ),
-                if (onRetry != null)
-                  Semantics(
-                    label: 'Regenerate response',
-                    button: true,
-                    excludeSemantics: true,
-                    child: IconButton(
-                      icon: const Icon(Icons.refresh, size: 20),
-                      tooltip: 'Regenerate from the preceding prompt',
-                      onPressed: onRetry,
-                      constraints: const BoxConstraints.tightFor(
-                        width: 48,
-                        height: 48,
-                      ),
-                    ),
-                  ),
-              ],
+              ),
             ),
           ),
         ],
