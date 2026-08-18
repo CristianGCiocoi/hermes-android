@@ -84,9 +84,11 @@ class FakeAtlasPort implements AtlasProjectEnrichmentPort {
 class FakeHermesPort implements HermesProjectsPort {
   final List<Map<String, dynamic>> projects;
   String? activeId;
+  int createCalls = 0;
+  Map<String, dynamic>? createResponseOverride;
 
   FakeHermesPort({List<Map<String, dynamic>>? projects})
-    : projects = projects ?? [nativeProject()];
+    : projects = List.of(projects ?? [nativeProject()]);
 
   @override
   Future<Map<String, dynamic>> listProjects() async => {
@@ -95,24 +97,59 @@ class FakeHermesPort implements HermesProjectsPort {
   };
 
   @override
+  Future<Map<String, dynamic>> createProject({
+    required String name,
+    String? description,
+    String? primaryPath,
+    required bool use,
+  }) async {
+    createCalls++;
+    final override = createResponseOverride;
+    if (override != null) return override;
+    final project = nativeProject(
+      id: 'p_deadbeef',
+      name: name,
+      description: description,
+      primaryPath: primaryPath,
+    );
+    projects.add(project);
+    if (use) activeId = project['id'] as String;
+    return {'project': project};
+  }
+
+  @override
   Future<Map<String, dynamic>> setActiveProject(String hermesProjectId) async {
     activeId = hermesProjectId;
     return {'active_id': hermesProjectId};
   }
 }
 
-Map<String, dynamic> nativeProject({String id = 'p_1234abcd'}) => {
+Map<String, dynamic> nativeProject({
+  String id = 'p_1234abcd',
+  String name = 'ATLAS',
+  String? description = 'Native Hermes workspace',
+  String? primaryPath,
+}) => {
   'id': id,
   'slug': 'atlas',
-  'name': 'ATLAS',
-  'description': 'Native Hermes workspace',
+  'name': name,
+  'description': description,
   'icon': null,
   'color': null,
   'board_slug': null,
-  'primary_path': null,
+  'primary_path': primaryPath,
   'archived': false,
   'created_at': 1,
-  'folders': <Object>[],
+  'folders': primaryPath == null
+      ? <Object>[]
+      : <Object>[
+          {
+            'path': primaryPath,
+            'label': null,
+            'is_primary': true,
+            'added_at': 1,
+          },
+        ],
 };
 
 void main() {
@@ -297,6 +334,85 @@ void main() {
       );
     }
   });
+
+  test('native folder objects and primary path are cross-validated', () {
+    final project = HermesProject.fromNativeJson(
+      nativeProject(primaryPath: '/workspace/atlas'),
+    );
+    expect(project.primaryPath, '/workspace/atlas');
+
+    final mismatched = nativeProject(primaryPath: '/workspace/atlas');
+    (mismatched['folders'] as List).single['path'] = '/workspace/other';
+    expect(
+      () => HermesProject.fromNativeJson(mismatched),
+      throwsFormatException,
+    );
+  });
+
+  test(
+    'creates only a native Hermes Project and confirms active receipt',
+    () async {
+      final native = FakeHermesPort(projects: const []);
+      final project = await ProjectCatalogController(native).create(
+        name: ' Mobile Project ',
+        description: ' Native workspace ',
+        primaryPath: '/workspace/mobile',
+        setActiveNow: true,
+      );
+
+      expect(native.createCalls, 1);
+      expect(project.hermesProjectId, 'p_deadbeef');
+      expect(project.name, 'Mobile Project');
+      expect(project.description, 'Native workspace');
+      expect(project.primaryPath, '/workspace/mobile');
+      expect(project.isActive, isTrue);
+      expect(project.canonicalProjectId, isNull);
+      expect(native.activeId, 'p_deadbeef');
+    },
+  );
+
+  test('invalid and duplicate create inputs fail before create RPC', () async {
+    final native = FakeHermesPort();
+    final controller = ProjectCatalogController(native);
+
+    await expectLater(
+      controller.create(
+        name: 'ATLAS',
+        primaryPath: '/workspace/duplicate',
+        setActiveNow: false,
+      ),
+      throwsFormatException,
+    );
+    await expectLater(
+      controller.create(
+        name: 'New Project',
+        description: 'authorization=hidden',
+        primaryPath: 'relative/path',
+        setActiveNow: false,
+      ),
+      throwsFormatException,
+    );
+    expect(native.createCalls, 0);
+  });
+
+  test(
+    'malformed create receipt is rejected without a local substitute',
+    () async {
+      final native = FakeHermesPort(projects: const [])
+        ..createResponseOverride = {'project': 'wrong-type'};
+
+      await expectLater(
+        ProjectCatalogController(native).create(
+          name: 'Mobile Project',
+          primaryPath: '/workspace/mobile',
+          setActiveNow: false,
+        ),
+        throwsFormatException,
+      );
+      expect(native.createCalls, 1);
+      expect(native.projects, isEmpty);
+    },
+  );
 
   test(
     'ATLAS-enriched native selection needs binding only for a conversation',

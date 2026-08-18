@@ -12,6 +12,13 @@ import 'desktop_gateway_client.dart';
 abstract interface class HermesProjectsPort {
   Future<Map<String, dynamic>> listProjects();
 
+  Future<Map<String, dynamic>> createProject({
+    required String name,
+    String? description,
+    String? primaryPath,
+    required bool use,
+  });
+
   Future<Map<String, dynamic>> setActiveProject(String hermesProjectId);
 }
 
@@ -37,6 +44,7 @@ class HermesProject {
   final String slug;
   final String name;
   final String? description;
+  final String? primaryPath;
   final bool archived;
   final bool isActive;
   final MobileProjectContext? atlasContext;
@@ -46,6 +54,7 @@ class HermesProject {
     required this.slug,
     required this.name,
     required this.description,
+    required this.primaryPath,
     required this.archived,
     required this.isActive,
     required this.atlasContext,
@@ -97,7 +106,7 @@ class HermesProject {
       'native Hermes Project board slug',
       64,
     );
-    _optionalNativeString(
+    final primaryPath = _optionalNativeString(
       value['primary_path'],
       'native Hermes Project primary path',
       2048,
@@ -117,14 +126,59 @@ class HermesProject {
         'native Hermes Project workspace shape drifted',
       );
     }
+    final folderPaths = <String>{};
+    String? primaryFolderPath;
     for (final folder in folders) {
-      _nativeString(folder, 'native Hermes Project folder', 2048);
+      if (folder is! Map) {
+        throw const FormatException(
+          'native Hermes Project folder is not an object',
+        );
+      }
+      final value = Map<String, dynamic>.from(folder);
+      const allowedFolder = {'path', 'label', 'is_primary', 'added_at'};
+      if (value.keys.any((key) => !allowedFolder.contains(key))) {
+        throw const FormatException('native Hermes Project folder drifted');
+      }
+      final path = _nativeString(
+        value['path'],
+        'native Hermes Project folder path',
+        2048,
+      );
+      _optionalNativeString(
+        value['label'],
+        'native Hermes Project folder label',
+        240,
+      );
+      if (value['is_primary'] is! bool ||
+          value['added_at'] is! int ||
+          (value['added_at'] as int) < 0 ||
+          !folderPaths.add(path)) {
+        throw const FormatException(
+          'native Hermes Project folder state is invalid',
+        );
+      }
+      if (value['is_primary'] == true) {
+        if (primaryFolderPath != null) {
+          throw const FormatException(
+            'native Hermes Project has multiple primary folders',
+          );
+        }
+        primaryFolderPath = path;
+      }
+    }
+    if ((folders.isEmpty && primaryPath != null) ||
+        (folders.isNotEmpty &&
+            (primaryFolderPath == null || primaryFolderPath != primaryPath))) {
+      throw const FormatException(
+        'native Hermes Project primary folder is invalid',
+      );
     }
     return HermesProject._(
       hermesProjectId: id,
       slug: slug,
       name: name,
       description: description as String?,
+      primaryPath: primaryPath,
       archived: value['archived'] as bool,
       isActive: false,
       atlasContext: null,
@@ -137,6 +191,7 @@ class HermesProject {
         slug: slug,
         name: name,
         description: description,
+        primaryPath: primaryPath,
         archived: archived,
         isActive: isActive,
         atlasContext: context,
@@ -147,6 +202,7 @@ class HermesProject {
     slug: slug,
     name: name,
     description: description,
+    primaryPath: primaryPath,
     archived: archived,
     isActive: value,
     atlasContext: atlasContext,
@@ -162,9 +218,27 @@ class HermesDesktopProjectsPort implements HermesProjectsPort {
   Future<Map<String, dynamic>> listProjects() => _client.listProjects();
 
   @override
+  Future<Map<String, dynamic>> createProject({
+    required String name,
+    String? description,
+    String? primaryPath,
+    required bool use,
+  }) => _client.createProject(
+    name: name,
+    description: description,
+    primaryPath: primaryPath,
+    use: use,
+  );
+
+  @override
   Future<Map<String, dynamic>> setActiveProject(String hermesProjectId) =>
       _client.setActiveProject(hermesProjectId);
 }
+
+typedef _NativeProjectsCatalog = ({
+  List<HermesProject> projects,
+  String? activeId,
+});
 
 class ProjectCatalogController {
   final HermesProjectsPort _hermes;
@@ -191,34 +265,10 @@ class ProjectCatalogController {
       throw const FormatException('project query is invalid');
     }
 
-    final payload = await _hermes.listProjects();
-    if (payload.keys.any((key) => key != 'projects' && key != 'active_id') ||
-        payload['projects'] is! List) {
-      throw const FormatException('native Hermes Projects response drifted');
-    }
-    final activeId = payload['active_id'];
-    if (activeId != null &&
-        (activeId is! String ||
-            !RegExp(r'^p_[a-f0-9]{8}$').hasMatch(activeId))) {
-      throw const FormatException('native Hermes active Project is invalid');
-    }
-    final rawProjects = payload['projects'] as List;
-    if (rawProjects.length > 500) {
-      throw const FormatException('too many native Hermes Projects');
-    }
-    final native = rawProjects.map((value) {
-      if (value is! Map) {
-        throw const FormatException('native Hermes Project is not an object');
-      }
-      return HermesProject.fromNativeJson(Map<String, dynamic>.from(value));
-    }).toList();
-    final nativeIds = <String>{};
-    if (native.any((project) => !nativeIds.add(project.hermesProjectId))) {
-      throw const FormatException('native Hermes Project identity collision');
-    }
-    if (activeId != null && !nativeIds.contains(activeId)) {
-      throw const FormatException('native Hermes active Project is unknown');
-    }
+    final nativeCatalog = _parseNativeCatalog(await _hermes.listProjects());
+    final activeId = nativeCatalog.activeId;
+    final native = nativeCatalog.projects;
+    final nativeIds = native.map((project) => project.hermesProjectId).toSet();
     final nativeWithActive = native
         .map(
           (project) => project.withActive(project.hermesProjectId == activeId),
@@ -281,6 +331,104 @@ class ProjectCatalogController {
                 (project.description?.toLowerCase().contains(needle) ?? false)),
       ),
     );
+  }
+
+  Future<HermesProject> create({
+    required String name,
+    String? description,
+    String? primaryPath,
+    required bool setActiveNow,
+  }) async {
+    final normalizedName = _projectCreateText(
+      name,
+      'Project name',
+      240,
+      isRequired: true,
+      singleLine: true,
+    )!;
+    final normalizedDescription = _projectCreateText(
+      description,
+      'Project description',
+      2000,
+    );
+    final normalizedPrimaryPath = _projectCreatePath(primaryPath);
+
+    final before = _parseNativeCatalog(await _hermes.listProjects());
+    final duplicateName = normalizedName.toLowerCase();
+    if (before.projects.any(
+      (project) => project.name.trim().toLowerCase() == duplicateName,
+    )) {
+      throw const FormatException('Hermes Project name already exists');
+    }
+
+    final response = await _hermes.createProject(
+      name: normalizedName,
+      description: normalizedDescription,
+      primaryPath: normalizedPrimaryPath,
+      use: setActiveNow,
+    );
+    if (response.keys.length != 1 || response['project'] is! Map) {
+      throw const FormatException(
+        'native Hermes Project create response drifted',
+      );
+    }
+    final project = HermesProject.fromNativeJson(
+      Map<String, dynamic>.from(response['project'] as Map),
+    );
+    if (before.projects.any(
+          (existing) => existing.hermesProjectId == project.hermesProjectId,
+        ) ||
+        project.name != normalizedName ||
+        project.description != normalizedDescription ||
+        project.primaryPath == null) {
+      throw const FormatException(
+        'native Hermes Project create receipt is invalid',
+      );
+    }
+
+    if (setActiveNow) {
+      final after = _parseNativeCatalog(await _hermes.listProjects());
+      if (after.activeId != project.hermesProjectId ||
+          !after.projects.any(
+            (item) => item.hermesProjectId == project.hermesProjectId,
+          )) {
+        throw const FormatException(
+          'native Hermes Project activation was not confirmed',
+        );
+      }
+    }
+    return project.withActive(setActiveNow);
+  }
+
+  _NativeProjectsCatalog _parseNativeCatalog(Map<String, dynamic> payload) {
+    if (payload.keys.any((key) => key != 'projects' && key != 'active_id') ||
+        payload['projects'] is! List) {
+      throw const FormatException('native Hermes Projects response drifted');
+    }
+    final activeId = payload['active_id'];
+    if (activeId != null &&
+        (activeId is! String ||
+            !RegExp(r'^p_[a-f0-9]{8}$').hasMatch(activeId))) {
+      throw const FormatException('native Hermes active Project is invalid');
+    }
+    final rawProjects = payload['projects'] as List;
+    if (rawProjects.length > 500) {
+      throw const FormatException('too many native Hermes Projects');
+    }
+    final native = rawProjects.map((value) {
+      if (value is! Map) {
+        throw const FormatException('native Hermes Project is not an object');
+      }
+      return HermesProject.fromNativeJson(Map<String, dynamic>.from(value));
+    }).toList();
+    final nativeIds = <String>{};
+    if (native.any((project) => !nativeIds.add(project.hermesProjectId))) {
+      throw const FormatException('native Hermes Project identity collision');
+    }
+    if (activeId != null && !nativeIds.contains(activeId)) {
+      throw const FormatException('native Hermes active Project is unknown');
+    }
+    return (projects: List.unmodifiable(native), activeId: activeId as String?);
   }
 
   Future<MobileConversationProjectBinding?> select({
@@ -348,4 +496,43 @@ String _nativeString(Object? value, String label, int maxLength) {
 String? _optionalNativeString(Object? value, String label, int maxLength) {
   if (value == null) return null;
   return _nativeString(value, label, maxLength);
+}
+
+String? _projectCreateText(
+  String? value,
+  String label,
+  int maxLength, {
+  bool isRequired = false,
+  bool singleLine = false,
+}) {
+  final normalized = value?.trim();
+  if (normalized == null || normalized.isEmpty) {
+    if (isRequired) throw FormatException('$label is required');
+    return null;
+  }
+  if (normalized.length > maxLength ||
+      normalized.contains('\u0000') ||
+      (singleLine && RegExp(r'[\r\n]').hasMatch(normalized)) ||
+      !isSecretFreeProjectValue(normalized)) {
+    throw FormatException('$label is invalid');
+  }
+  return normalized;
+}
+
+String _projectCreatePath(String? value) {
+  final path = _projectCreateText(
+    value,
+    'Main folder',
+    2048,
+    isRequired: true,
+    singleLine: true,
+  )!;
+  final isAbsolute =
+      path.startsWith('/') ||
+      RegExp(r'^[A-Za-z]:[\\/]').hasMatch(path) ||
+      RegExp(r'^\\\\[^\\]+\\[^\\]+').hasMatch(path);
+  if (!isAbsolute) {
+    throw const FormatException('Main folder must be an absolute path');
+  }
+  return path;
 }

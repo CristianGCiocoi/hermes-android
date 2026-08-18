@@ -34,8 +34,64 @@ class ScreenHermesPort implements HermesProjectsPort {
   }
 
   @override
+  Future<Map<String, dynamic>> createProject({
+    required String name,
+    String? description,
+    String? primaryPath,
+    required bool use,
+  }) => throw UnsupportedError('creation is not used by this fixture');
+
+  @override
   Future<Map<String, dynamic>> setActiveProject(String hermesProjectId) async {
     selectionCalls++;
+    return {'active_id': hermesProjectId};
+  }
+}
+
+class CreatingScreenHermesPort implements HermesProjectsPort {
+  final List<Map<String, dynamic>> projects = [];
+  String? activeId;
+  int createCalls = 0;
+  bool malformedCreateResponse = false;
+
+  @override
+  Future<Map<String, dynamic>> listProjects() async => {
+    'active_id': activeId,
+    'projects': projects,
+  };
+
+  @override
+  Future<Map<String, dynamic>> createProject({
+    required String name,
+    String? description,
+    String? primaryPath,
+    required bool use,
+  }) async {
+    createCalls++;
+    if (malformedCreateResponse) return {'project': 'wrong-type'};
+    final project = <String, dynamic>{
+      'id': 'p_deadbeef',
+      'slug': 'mobile-project',
+      'name': name,
+      'description': description,
+      'icon': null,
+      'color': null,
+      'board_slug': null,
+      'primary_path': primaryPath,
+      'archived': false,
+      'created_at': 2,
+      'folders': [
+        {'path': primaryPath, 'label': null, 'is_primary': true, 'added_at': 2},
+      ],
+    };
+    projects.add(project);
+    if (use) activeId = project['id'] as String;
+    return {'project': project};
+  }
+
+  @override
+  Future<Map<String, dynamic>> setActiveProject(String hermesProjectId) async {
+    activeId = hermesProjectId;
     return {'active_id': hermesProjectId};
   }
 }
@@ -245,5 +301,110 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Project selection was not accepted.'), findsOneWidget);
     expect(find.byKey(const Key('project-selected')), findsNothing);
+  });
+
+  testWidgets('creates a native Hermes Project and confirms active state', (
+    tester,
+  ) async {
+    final port = CreatingScreenHermesPort();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ProjectsScreen(controller: ProjectCatalogController(port)),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('New Hermes Project'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('project-name-field')),
+      'Mobile Project',
+    );
+    await tester.enterText(
+      find.byKey(const Key('project-description-field')),
+      'Created through the native Hermes contract',
+    );
+    await tester.enterText(
+      find.byKey(const Key('project-main-folder-field')),
+      '/workspace/mobile-project',
+    );
+    await tester.tap(find.byKey(const Key('create-hermes-project-submit')));
+    await tester.pumpAndSettle();
+
+    expect(port.createCalls, 1);
+    expect(port.activeId, 'p_deadbeef');
+    expect(find.text('Mobile Project'), findsOneWidget);
+    expect(find.byKey(const Key('project-selected')), findsOneWidget);
+    expect(find.text('Mobile Project created and set active.'), findsOneWidget);
+  });
+
+  testWidgets('rejects a relative main folder before calling the Gateway', (
+    tester,
+  ) async {
+    final port = CreatingScreenHermesPort();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ProjectsScreen(controller: ProjectCatalogController(port)),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('New Hermes Project'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('project-name-field')),
+      'Invalid Folder',
+    );
+    await tester.enterText(
+      find.byKey(const Key('project-main-folder-field')),
+      'relative/folder',
+    );
+    await tester.tap(find.byKey(const Key('create-hermes-project-submit')));
+    await tester.pump();
+
+    expect(port.createCalls, 0);
+    expect(find.text('Use an absolute Gateway folder path.'), findsOneWidget);
+  });
+
+  testWidgets('duplicate name is fail-closed without a create RPC', (
+    tester,
+  ) async {
+    final port = CreatingScreenHermesPort();
+    port.projects.add({
+      'id': 'p_1234abcd',
+      'slug': 'existing',
+      'name': 'Existing Project',
+      'description': null,
+      'icon': null,
+      'color': null,
+      'board_slug': null,
+      'primary_path': null,
+      'archived': false,
+      'created_at': 1,
+      'folders': <Object>[],
+    });
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ProjectsScreen(controller: ProjectCatalogController(port)),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('New Hermes Project'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('project-name-field')),
+      ' existing project ',
+    );
+    await tester.enterText(
+      find.byKey(const Key('project-main-folder-field')),
+      '/workspace/existing',
+    );
+    await tester.tap(find.byKey(const Key('create-hermes-project-submit')));
+    await tester.pumpAndSettle();
+
+    expect(port.createCalls, 0);
+    expect(
+      find.text('A Hermes Project with this name already exists.'),
+      findsOneWidget,
+    );
   });
 }

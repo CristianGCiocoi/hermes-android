@@ -417,6 +417,23 @@ class DesktopGatewayClient {
     return client.listProjects();
   }
 
+  /// Creates one upstream Hermes Project in the current profile. ATLAS
+  /// identity and ProjectProjection are deliberately not created by mobile.
+  Future<Map<String, dynamic>> createProject({
+    required String name,
+    String? description,
+    String? primaryPath,
+    required bool use,
+  }) async {
+    final client = await _connectSocket();
+    return client.createProject(
+      name: name,
+      description: description,
+      primaryPath: primaryPath,
+      use: use,
+    );
+  }
+
   /// Selects an existing upstream Hermes runtime Project. The identifier is
   /// Hermes-owned projection metadata, never canonical ATLAS Project identity.
   Future<Map<String, dynamic>> setActiveProject(String hermesProjectId) async {

@@ -2050,7 +2050,7 @@ void main() {
     });
 
     test(
-      'uses upstream Hermes projects.list and projects.set_active',
+      'uses upstream Hermes Projects list create and set_active contracts',
       () async {
         final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
         final requests = <Map<String, dynamic>>[];
@@ -2065,9 +2065,28 @@ void main() {
                   jsonEncode({
                     'jsonrpc': '2.0',
                     'id': request['id'],
-                    'result': request['method'] == 'projects.list'
-                        ? {'projects': <Object>[], 'active_id': null}
-                        : {'active_id': 'p_1234abcd'},
+                    'result': switch (request['method']) {
+                      'projects.list' => {
+                        'projects': <Object>[],
+                        'active_id': null,
+                      },
+                      'projects.create' => {
+                        'project': {
+                          'id': 'p_deadbeef',
+                          'slug': 'mobile-project',
+                          'name': 'Mobile Project',
+                          'description': 'Native project',
+                          'icon': null,
+                          'color': null,
+                          'board_slug': null,
+                          'primary_path': '/workspace/mobile',
+                          'archived': false,
+                          'created_at': 1,
+                          'folders': <Object>[],
+                        },
+                      },
+                      _ => {'active_id': 'p_1234abcd'},
+                    },
                   }),
                 );
               });
@@ -2077,13 +2096,27 @@ void main() {
         try {
           await client.connect();
           final catalog = await client.listProjects();
+          final created = await client.createProject(
+            name: 'Mobile Project',
+            description: 'Native project',
+            primaryPath: '/workspace/mobile',
+            use: true,
+          );
           final active = await client.setActiveProject('p_1234abcd');
           expect(catalog['projects'], isEmpty);
+          expect(created['project']['id'], 'p_deadbeef');
           expect(active['active_id'], 'p_1234abcd');
           expect(requests[0]['method'], 'projects.list');
           expect(requests[0]['params'], <String, dynamic>{});
-          expect(requests[1]['method'], 'projects.set_active');
-          expect(requests[1]['params'], {'id': 'p_1234abcd'});
+          expect(requests[1]['method'], 'projects.create');
+          expect(requests[1]['params'], {
+            'name': 'Mobile Project',
+            'description': 'Native project',
+            'primary_path': '/workspace/mobile',
+            'use': true,
+          });
+          expect(requests[2]['method'], 'projects.set_active');
+          expect(requests[2]['params'], {'id': 'p_1234abcd'});
         } finally {
           client.close();
           await socketSubscription.cancel();

@@ -1070,6 +1070,34 @@ class WsClient {
     throw JsonRpcError('projects.list', 'Gateway returned no Projects catalog');
   }
 
+  Future<Map<String, dynamic>> createProject({
+    required String name,
+    String? description,
+    String? primaryPath,
+    required bool use,
+  }) async {
+    final response = await send('projects.create', {
+      'name': name,
+      'description': ?description,
+      'primary_path': ?primaryPath,
+      'use': use,
+    });
+    final error = response['error'];
+    if (error != null) {
+      throw _gatewayResponseError(
+        'projects.create',
+        error,
+        fallbackMessage: 'Could not create Hermes Project',
+      );
+    }
+    final result = response['result'];
+    if (result is Map<String, dynamic>) return result;
+    throw JsonRpcError(
+      'projects.create',
+      'Gateway returned no created Project',
+    );
+  }
+
   Future<Map<String, dynamic>> setActiveProject(String projectId) async {
     if (!RegExp(r'^p_[a-f0-9]{8}$').hasMatch(projectId)) {
       throw const FormatException('native Hermes Project id is invalid');

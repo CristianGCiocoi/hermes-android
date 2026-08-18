@@ -93,10 +93,41 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
     }
   }
 
+  Future<void> _showCreateProject() async {
+    final created = await showDialog<HermesProject>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) =>
+          _CreateHermesProjectDialog(controller: widget.controller),
+    );
+    if (created == null || !mounted) return;
+    await _load();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          created.isActive
+              ? '${created.name} created and set active.'
+              : '${created.name} created.',
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Projects')),
+      appBar: AppBar(
+        title: const Text('Projects'),
+        actions: [
+          IconButton(
+            key: const Key('new-hermes-project'),
+            tooltip: 'New Hermes Project',
+            onPressed: _bindingProjectId == null ? _showCreateProject : null,
+            icon: const Icon(Icons.create_new_folder_outlined),
+          ),
+        ],
+      ),
       body: Column(
         children: [
           Padding(
@@ -183,6 +214,179 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
             ),
         ],
       ),
+    );
+  }
+}
+
+class _CreateHermesProjectDialog extends StatefulWidget {
+  final ProjectCatalogController controller;
+
+  const _CreateHermesProjectDialog({required this.controller});
+
+  @override
+  State<_CreateHermesProjectDialog> createState() =>
+      _CreateHermesProjectDialogState();
+}
+
+class _CreateHermesProjectDialogState
+    extends State<_CreateHermesProjectDialog> {
+  final _formKey = GlobalKey<FormState>();
+  final _name = TextEditingController();
+  final _description = TextEditingController();
+  final _mainFolder = TextEditingController();
+  bool _setActiveNow = true;
+  bool _creating = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _name.dispose();
+    _description.dispose();
+    _mainFolder.dispose();
+    super.dispose();
+  }
+
+  String? _requiredText(String? value, String label, int maxLength) {
+    final normalized = value?.trim() ?? '';
+    if (normalized.isEmpty) return '$label is required.';
+    if (normalized.length > maxLength) return '$label is too long.';
+    return null;
+  }
+
+  String? _mainFolderError(String? value) {
+    final required = _requiredText(value, 'Main folder', 2048);
+    if (required != null) return required;
+    final path = value!.trim();
+    final isAbsolute =
+        path.startsWith('/') ||
+        RegExp(r'^[A-Za-z]:[\\/]').hasMatch(path) ||
+        RegExp(r'^\\\\[^\\]+\\[^\\]+').hasMatch(path);
+    return isAbsolute ? null : 'Use an absolute Gateway folder path.';
+  }
+
+  Future<void> _create() async {
+    if (_creating || !(_formKey.currentState?.validate() ?? false)) return;
+    setState(() {
+      _creating = true;
+      _error = null;
+    });
+    try {
+      final project = await widget.controller.create(
+        name: _name.text,
+        description: _description.text,
+        primaryPath: _mainFolder.text,
+        setActiveNow: _setActiveNow,
+      );
+      if (!mounted) return;
+      Navigator.of(context).pop(project);
+    } on FormatException catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _error = error.message == 'Hermes Project name already exists'
+            ? 'A Hermes Project with this name already exists.'
+            : 'Project details or the Gateway response were invalid.';
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _error = 'Project creation was not accepted.');
+    } finally {
+      if (mounted) setState(() => _creating = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('New Hermes Project'),
+      content: SizedBox(
+        width: 520,
+        child: SingleChildScrollView(
+          child: Form(
+            key: _formKey,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextFormField(
+                  key: const Key('project-name-field'),
+                  controller: _name,
+                  autofocus: true,
+                  enabled: !_creating,
+                  maxLength: 240,
+                  textInputAction: TextInputAction.next,
+                  decoration: const InputDecoration(labelText: 'Name'),
+                  validator: (value) =>
+                      _requiredText(value, 'Project name', 240),
+                ),
+                TextFormField(
+                  key: const Key('project-description-field'),
+                  controller: _description,
+                  enabled: !_creating,
+                  maxLength: 2000,
+                  minLines: 2,
+                  maxLines: 4,
+                  decoration: const InputDecoration(
+                    labelText: 'Description (optional)',
+                  ),
+                ),
+                TextFormField(
+                  key: const Key('project-main-folder-field'),
+                  controller: _mainFolder,
+                  enabled: !_creating,
+                  maxLength: 2048,
+                  textInputAction: TextInputAction.done,
+                  onFieldSubmitted: (_) => _create(),
+                  decoration: const InputDecoration(
+                    labelText: 'Main folder',
+                    hintText: '/workspace/project',
+                    helperText: 'Absolute path on the Hermes Gateway host',
+                  ),
+                  validator: _mainFolderError,
+                ),
+                SwitchListTile(
+                  key: const Key('project-set-active-now'),
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Set active now'),
+                  subtitle: const Text(
+                    'Changes only the active native Hermes Project.',
+                  ),
+                  value: _setActiveNow,
+                  onChanged: _creating
+                      ? null
+                      : (value) => setState(() => _setActiveNow = value),
+                ),
+                if (_error != null)
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      _error!,
+                      key: const Key('project-create-error'),
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.error,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _creating ? null : () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton.icon(
+          key: const Key('create-hermes-project-submit'),
+          onPressed: _creating ? null : _create,
+          icon: _creating
+              ? const SizedBox.square(
+                  dimension: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.add),
+          label: const Text('Create Project'),
+        ),
+      ],
     );
   }
 }
