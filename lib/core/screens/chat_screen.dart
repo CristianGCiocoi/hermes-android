@@ -17,6 +17,7 @@ import '../services/connection_manager.dart';
 import '../services/attachment_draft_service.dart';
 import '../services/chat_model_override_store.dart';
 import '../services/desktop_gateway_client.dart';
+import '../services/gateway_activity_center_controller.dart';
 import '../services/gateway_turn_application_controller.dart';
 import '../services/gateway_turn_coordinator.dart';
 import '../services/gateway_turn_recovery.dart';
@@ -34,6 +35,7 @@ import '../utils/chat_history_scroll.dart';
 import '../utils/message_content.dart';
 import '../utils/responsive.dart';
 import '../widgets/gateway_activity_card.dart';
+import '../widgets/gateway_activity_center_sheet.dart';
 import '../widgets/attachment_draft_tile.dart';
 import '../widgets/chat_end_affordance.dart';
 import '../widgets/gateway_approval_dialog.dart';
@@ -80,9 +82,6 @@ class _GatewayReasoningDisplay {
 }
 
 enum _ResponseTransport { none, rest, desktop }
-
-const _legacyTransportNotice =
-    'Background recovery unavailable — legacy transport';
 
 @visibleForTesting
 typedef TestRemotePromptSubmit =
@@ -174,11 +173,7 @@ class ChatScreen extends StatefulWidget {
 
 class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   List<Map<String, dynamic>> _messages = [];
-  final List<GatewayToolActivity> _toolActivities = [];
-  final List<GatewaySubagentActivity> _subagentActivities = [];
-  final Map<String, GatewayNotification> _gatewayNotifications = {};
-  final Map<String, Timer> _notificationTimers = {};
-  late final List<GatewayNotice> _gatewayNotices;
+  late final GatewayActivityCenterController _activityCenter;
   bool _loading = true;
   String? _error;
   late final ApiClient _client;
@@ -206,11 +201,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   bool _changingModel = false;
   bool _sending = false;
   bool _streaming = false;
-  GatewayTurnStatus? _gatewayTurnStatus;
   _ResponseTransport _activeResponseTransport = _ResponseTransport.none;
   String? _activeClientTurnId;
   bool _recoveringTurn = false;
-  bool _legacyTransportFallback = false;
   int _responseGeneration = 0;
   bool _approvalDialogOpen = false;
   final List<_PendingSensitivePrompt> _sensitivePromptQueue = [];
@@ -243,12 +236,25 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   static const _initialEndFrameBudget = 12;
   static const _requiredStableEndFrames = 2;
   static const _stableExtentTolerance = 0.5;
-  static final Map<String, List<GatewayNotice>> _savedGatewayNotices = {};
+
+  List<GatewayToolActivity> get _toolActivities => _activityCenter.tools;
+  List<GatewaySubagentActivity> get _subagentActivities =>
+      _activityCenter.subagents;
+  GatewayTurnStatus? get _gatewayTurnStatus => _activityCenter.turnStatus;
+  set _gatewayTurnStatus(GatewayTurnStatus? value) =>
+      _activityCenter.setTurnStatus(value);
+  bool get _legacyTransportFallback => _activityCenter.legacyTransportFallback;
+  set _legacyTransportFallback(bool value) =>
+      _activityCenter.setLegacyTransportFallback(value);
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _activityCenter = GatewayActivityCenterController(
+      sessionIdentity: _gatewayNoticeIdentity,
+    )..addListener(_onActivityCenterChanged);
+    unawaited(_activityCenter.initialize());
     _client =
         widget.testApiClient ??
         ApiClient(
@@ -269,9 +275,6 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     )..addListener(_onVoiceComposerChanged);
     _attachmentDrafts.addAll(widget.testInitialAttachmentDrafts);
     _pendingPromotions.addAll(widget.testInitialPendingPromotions);
-    _gatewayNotices = List<GatewayNotice>.from(
-      _savedGatewayNotices[_gatewayNoticeIdentity] ?? const [],
-    );
     _chatModelStore = ChatModelOverrideStore.open();
     _sessionModelRestore = _restoreSessionModelOverride();
     if (widget.connection.desktopGatewayUrl?.trim().isNotEmpty == true) {
@@ -333,17 +336,14 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _savedGatewayNotices[_gatewayNoticeIdentity] = List.unmodifiable(
-      _gatewayNotices,
-    );
+    _activityCenter
+      ..removeListener(_onActivityCenterChanged)
+      ..dispose();
     _voiceComposer
       ..removeListener(_onVoiceComposerChanged)
       ..dispose();
     if (widget.testVoiceComposerAdapter == null) {
       _flutterTts.stop();
-    }
-    for (final timer in _notificationTimers.values) {
-      timer.cancel();
     }
     _client.close();
     unawaited(
@@ -367,6 +367,10 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         unawaited(_recoverPendingTurn());
       }
     }
+  }
+
+  void _onActivityCenterChanged() {
+    if (mounted) setState(() {});
   }
 
   Future<void> _initializeChat() async {
@@ -846,7 +850,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   }
 
   void _extractToolMessages(List<Map<String, dynamic>> messages) {
-    _toolActivities.clear();
+    final activities = <GatewayToolActivity>[];
     for (final msg in messages) {
       if (!isToolResultMessage(msg)) continue;
 
@@ -865,7 +869,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       }
       if (toolName.isEmpty) toolName = 'tool';
 
-      _toolActivities.add(
+      activities.add(
         GatewayToolActivity(
           toolId: toolCallId.isEmpty ? null : toolCallId,
           name: toolName,
@@ -873,6 +877,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         ),
       );
     }
+    _activityCenter.replaceTools(activities);
   }
 
   Future<void> _showAttachmentPicker() async {
@@ -1121,6 +1126,51 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     );
   }
 
+  void _recordAttachmentActivity(AttachmentDraft draft) {
+    final phase = switch (draft.status) {
+      AttachmentDraftStatus.uploading => GatewayToolActivityPhase.progress,
+      AttachmentDraftStatus.attached => GatewayToolActivityPhase.completed,
+      AttachmentDraftStatus.failed => GatewayToolActivityPhase.failed,
+      AttachmentDraftStatus.ready => GatewayToolActivityPhase.running,
+    };
+    final detail = switch (draft.status) {
+      AttachmentDraftStatus.uploading => 'Uploading ${draft.name}',
+      AttachmentDraftStatus.attached =>
+        draft.temporaryContentId == null
+            ? 'Attachment receipt verified • ${draft.name}'
+            : 'Temporary Content receipt verified • ${draft.name}',
+      AttachmentDraftStatus.failed => 'Upload failed • ${draft.name}',
+      AttachmentDraftStatus.ready => 'Ready • ${draft.name}',
+    };
+    _activityCenter.upsertTool(
+      GatewayToolActivity(
+        toolId: 'attachment-${draft.id}',
+        name: draft.isImage ? 'attach_image' : 'attach_file',
+        phase: phase,
+        detail: detail,
+      ),
+    );
+  }
+
+  void _recordPromotionActivity(
+    AttachmentDraft draft,
+    GatewayToolActivityPhase phase,
+  ) {
+    _activityCenter.upsertTool(
+      GatewayToolActivity(
+        toolId: 'promote-${draft.id}',
+        name: 'promote_document',
+        phase: phase,
+        detail: switch (phase) {
+          GatewayToolActivityPhase.completed =>
+            'Promotion receipt verified • ${draft.name}',
+          GatewayToolActivityPhase.failed => 'Promotion failed • ${draft.name}',
+          _ => 'Promoting ${draft.name}',
+        },
+      ),
+    );
+  }
+
   void _trackTemporaryPromotion(List<AttachmentDraft> attachments) {
     final temporary = attachments
         .where(
@@ -1143,12 +1193,15 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       return;
     }
     setState(() => _promotingTemporaryAttachments = true);
+    AttachmentDraft? activePromotion;
     try {
       for (final draft in attachments) {
         final temporaryContentId = draft.temporaryContentId;
         if (temporaryContentId == null || draft.promotionReceipt != null) {
           continue;
         }
+        activePromotion = draft;
+        _recordPromotionActivity(draft, GatewayToolActivityPhase.running);
         draft.promotionReceipt = widget.testRemoteTemporaryPromote != null
             ? await widget.testRemoteTemporaryPromote!(
                 temporaryContentId: temporaryContentId,
@@ -1159,6 +1212,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                 temporaryContentId: temporaryContentId,
                 clientAttachmentId: draft.id,
               );
+        _recordPromotionActivity(draft, GatewayToolActivityPhase.completed);
+        activePromotion = null;
       }
       if (!mounted) return;
       setState(
@@ -1174,6 +1229,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       );
     } catch (error) {
       if (!mounted) return;
+      if (activePromotion case final draft?) {
+        _recordPromotionActivity(draft, GatewayToolActivityPhase.failed);
+      }
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('Document promotion failed: $error'),
@@ -1202,8 +1260,11 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         draft: draft,
         upload: ({required draft, required dataUrl}) =>
             _uploadAttachmentDraft(desktopGateway, draft, dataUrl),
-        onChanged: (_) {
-          if (mounted) setState(() {});
+        onChanged: (draft) {
+          if (mounted) {
+            _recordAttachmentActivity(draft);
+            setState(() {});
+          }
         },
       );
       if (!mounted) return;
@@ -1693,6 +1754,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         },
         onChanged: (draft) {
           if (!mounted || responseGeneration != _responseGeneration) return;
+          _recordAttachmentActivity(draft);
           setState(() {
             if (draft.status == AttachmentDraftStatus.uploading) {
               final index = attachments.indexOf(draft);
@@ -1854,6 +1916,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           draft
             ..status = AttachmentDraftStatus.uploading
             ..error = null;
+          _recordAttachmentActivity(draft);
           _gatewayTurnStatus = GatewayTurnStatus(
             kind: 'upload',
             text: 'Uploading ${index + 1}/${attachments.length}: ${draft.name}',
@@ -1873,7 +1936,10 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         );
         staged.add(receipt);
         if (!mounted || responseGeneration != _responseGeneration) return;
-        setState(() => draft.status = AttachmentDraftStatus.attached);
+        setState(() {
+          draft.status = AttachmentDraftStatus.attached;
+          _recordAttachmentActivity(draft);
+        });
       }
     } catch (error) {
       if (staged.isNotEmpty) {
@@ -1891,6 +1957,14 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         draft
           ..status = AttachmentDraftStatus.ready
           ..error = null;
+        _activityCenter.upsertTool(
+          GatewayToolActivity(
+            toolId: 'attachment-${draft.id}',
+            name: draft.isImage ? 'attach_image' : 'attach_file',
+            phase: GatewayToolActivityPhase.failed,
+            detail: 'Staging failed • ${draft.name}',
+          ),
+        );
       }
       _handleSendError(error);
       return;
@@ -2086,32 +2160,13 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     if (event.type == 'notification.show') {
       final notification = GatewayNotification.fromEventData(event.data);
       if (notification == null) return;
-      _notificationTimers.remove(notification.key)?.cancel();
-      setState(() => _gatewayNotifications[notification.key] = notification);
+      _activityCenter.showNotification(notification);
       _scheduleStreamingFollow();
-      if (notification.ttl case final ttl?) {
-        _notificationTimers[notification.key] = Timer(ttl, () {
-          if (!mounted) return;
-          setState(() => _gatewayNotifications.remove(notification.key));
-          _notificationTimers.remove(notification.key);
-        });
-      }
       return;
     }
     if (event.type == 'notification.clear') {
       final key = event.data['key']?.toString().trim();
-      setState(() {
-        if (key == null || key.isEmpty) {
-          _gatewayNotifications.clear();
-          for (final timer in _notificationTimers.values) {
-            timer.cancel();
-          }
-          _notificationTimers.clear();
-        } else {
-          _gatewayNotifications.remove(key);
-          _notificationTimers.remove(key)?.cancel();
-        }
-      });
+      _activityCenter.clearNotification(key);
       _scheduleStreamingFollow();
       return;
     }
@@ -2121,14 +2176,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     }
     final notice = GatewayNotice.fromGatewayEvent(event.type, event.data);
     if (notice == null) return;
-    if (_gatewayNotices.any((item) => item.identity == notice.identity)) return;
-    setState(() {
-      _gatewayNotices.add(notice);
-      if (_gatewayNotices.length > 20) _gatewayNotices.removeAt(0);
-      _savedGatewayNotices[_gatewayNoticeIdentity] = List.unmodifiable(
-        _gatewayNotices,
-      );
-    });
+    if (!_activityCenter.addNotice(notice)) return;
     _scheduleStreamingFollow();
   }
 
@@ -2136,14 +2184,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     final update = GatewaySubagentActivity.fromGatewayEvent(eventType, data);
     if (update == null || !mounted) return;
     setState(() {
-      final index = _subagentActivities.indexWhere(
-        (activity) => activity.id == update.id,
-      );
-      if (index < 0) {
-        _subagentActivities.add(update);
-      } else {
-        _subagentActivities[index] = _subagentActivities[index].merge(update);
-      }
+      _activityCenter.upsertSubagent(update);
       if (!update.isComplete) {
         _gatewayTurnStatus = GatewayTurnStatus(
           kind: 'subagent',
@@ -2161,15 +2202,18 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     if (_approvalDialogOpen) return;
     final request = GatewayApprovalRequest.fromEventData(eventData);
     _approvalDialogOpen = true;
+    _syncActivityNeedsInput();
 
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted || responseGeneration != _responseGeneration) {
         _approvalDialogOpen = false;
+        _syncActivityNeedsInput();
         return;
       }
       final desktopGateway = _desktopGateway;
       if (desktopGateway == null) {
         _approvalDialogOpen = false;
+        _syncActivityNeedsInput();
         return;
       }
 
@@ -2185,6 +2229,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         ),
       );
       _approvalDialogOpen = false;
+      _syncActivityNeedsInput();
       _drainClarifyPromptQueue();
       _drainSensitivePromptQueue();
 
@@ -2230,6 +2275,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     _sensitivePromptQueue.add(
       _PendingSensitivePrompt(request, responseGeneration),
     );
+    _syncActivityNeedsInput();
     _drainSensitivePromptQueue();
   }
 
@@ -2243,6 +2289,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     }
     final pending = _sensitivePromptQueue.removeAt(0);
     _activeSensitivePrompt = pending;
+    _syncActivityNeedsInput();
 
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted ||
@@ -2252,12 +2299,14 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
               pending.request.requestId) {
         _expiredSensitivePromptIds.remove(pending.request.requestId);
         _activeSensitivePrompt = null;
+        _syncActivityNeedsInput();
         _drainSensitivePromptQueue();
         return;
       }
       final desktopGateway = _desktopGateway;
       if (desktopGateway == null) {
         _activeSensitivePrompt = null;
+        _syncActivityNeedsInput();
         _drainSensitivePromptQueue();
         return;
       }
@@ -2287,6 +2336,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           pending.request.requestId) {
         _activeSensitivePrompt = null;
       }
+      _syncActivityNeedsInput();
       if (result == null &&
           mounted &&
           pending.responseGeneration == _responseGeneration) {
@@ -2331,6 +2381,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     } else if (_activeSensitivePrompt?.request.requestId != requestId) {
       _expiredSensitivePromptIds.remove(requestId);
     }
+    _syncActivityNeedsInput();
   }
 
   void _queueClarifyPrompt(
@@ -2347,6 +2398,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     if (duplicate) return;
 
     _clarifyPromptQueue.add(_PendingClarifyPrompt(request, responseGeneration));
+    _syncActivityNeedsInput();
     _drainClarifyPromptQueue();
   }
 
@@ -2360,6 +2412,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     }
     final pending = _clarifyPromptQueue.removeAt(0);
     _activeClarifyPrompt = pending;
+    _syncActivityNeedsInput();
 
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted ||
@@ -2367,6 +2420,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           _activeClarifyPrompt?.request.requestId !=
               pending.request.requestId) {
         _activeClarifyPrompt = null;
+        _syncActivityNeedsInput();
         _drainSensitivePromptQueue();
         _drainClarifyPromptQueue();
         return;
@@ -2374,6 +2428,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       final desktopGateway = _desktopGateway;
       if (desktopGateway == null) {
         _activeClarifyPrompt = null;
+        _syncActivityNeedsInput();
         _drainSensitivePromptQueue();
         _drainClarifyPromptQueue();
         return;
@@ -2394,6 +2449,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           pending.request.requestId) {
         _activeClarifyPrompt = null;
       }
+      _syncActivityNeedsInput();
 
       // System Back or a barrier dismiss maps to the official empty answer,
       // matching Hermes Desktop's Skip behavior.
@@ -2418,6 +2474,16 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       _drainSensitivePromptQueue();
       _drainClarifyPromptQueue();
     });
+  }
+
+  void _syncActivityNeedsInput() {
+    _activityCenter.setNeedsInput(
+      _approvalDialogOpen ||
+          _activeSensitivePrompt != null ||
+          _sensitivePromptQueue.isNotEmpty ||
+          _activeClarifyPrompt != null ||
+          _clarifyPromptQueue.isNotEmpty,
+    );
   }
 
   Future<void> _stopResponse() async {
@@ -2512,23 +2578,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     final update = GatewayToolActivity.fromGatewayEvent(eventType, progress);
     if (update == null) return;
     setState(() {
-      var idx = update.toolId == null
-          ? -1
-          : _toolActivities.indexWhere(
-              (activity) => activity.toolId == update.toolId,
-            );
-      if (idx < 0) {
-        idx = _toolActivities.lastIndexWhere(
-          (activity) =>
-              !activity.isTerminal &&
-              activity.name.toLowerCase() == update.name.toLowerCase(),
-        );
-      }
-      if (idx >= 0) {
-        _toolActivities[idx] = _toolActivities[idx].merge(update);
-      } else {
-        _toolActivities.add(update);
-      }
+      _activityCenter.upsertTool(update);
       _gatewayTurnStatus = GatewayTurnStatus(
         kind: 'tool',
         text: update.isTerminal
@@ -2538,6 +2588,48 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     });
 
     _scheduleStreamingFollow();
+  }
+
+  Future<void> _showActivityCenter() {
+    return showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      showDragHandle: true,
+      builder: (_) => GatewayActivityCenterSheet(controller: _activityCenter),
+    );
+  }
+
+  Future<void> _showGatewayNotice(GatewayNotice notice) {
+    return showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(notice.title),
+        content: SingleChildScrollView(
+          child: SelectionArea(child: Text(notice.text)),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _dismissGatewayNotice(GatewayNotice notice) async {
+    try {
+      await _activityCenter.dismissNotice(notice.identity);
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Could not save the dismissed Activity item.'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+    }
   }
 
   @override
@@ -2598,6 +2690,16 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           ],
         ),
         actions: [
+          IconButton(
+            key: const Key('open-activity-center'),
+            tooltip: 'Hermes activity',
+            onPressed: _showActivityCenter,
+            icon: Badge(
+              isLabelVisible: _activityCenter.attentionCount > 0,
+              label: Text('${_activityCenter.attentionCount}'),
+              child: const Icon(Icons.receipt_long_outlined),
+            ),
+          ),
           if (_streaming)
             const Padding(
               padding: EdgeInsets.only(right: 8),
@@ -2646,23 +2748,18 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           ),
           child: Column(
             children: [
-              for (final notification in _gatewayNotifications.values)
+              for (final notification in _activityCenter.notifications)
                 _buildGatewayNotification(notification),
               if (_legacyTransportFallback)
-                Container(
+                Align(
                   key: const ValueKey('legacy-transport-notice'),
-                  width: double.infinity,
-                  color: Theme.of(context).colorScheme.tertiaryContainer,
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 10,
-                  ),
-                  child: Text(
-                    _legacyTransportNotice,
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      color: Theme.of(context).colorScheme.onTertiaryContainer,
-                      fontWeight: FontWeight.w600,
+                  alignment: Alignment.centerLeft,
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
+                    child: ActionChip(
+                      avatar: const Icon(Icons.cloud_off_outlined, size: 18),
+                      label: const Text('Legacy transport • recovery off'),
+                      onPressed: _showActivityCenter,
                     ),
                   ),
                 ),
@@ -2705,10 +2802,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       content: SelectionArea(child: Text(notification.text)),
       actions: [
         TextButton(
-          onPressed: () {
-            _notificationTimers.remove(notification.key)?.cancel();
-            setState(() => _gatewayNotifications.remove(notification.key));
-          },
+          onPressed: () => _activityCenter.clearNotification(notification.key),
           child: const Text('Dismiss'),
         ),
       ],
@@ -3112,7 +3206,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         List<GatewaySubagentActivity>.from(_subagentActivities),
       );
     }
-    displayMessages.addAll(_gatewayNotices);
+    displayMessages.addAll(_activityCenter.transcriptNotices);
 
     return NotificationListener<ScrollMetricsNotification>(
       onNotification: (notification) {
@@ -3144,7 +3238,11 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
               );
             }
             if (item is GatewayNotice) {
-              return GatewayNoticeCard(notice: item);
+              return GatewayNoticeCard(
+                notice: item,
+                onView: () => _showGatewayNotice(item),
+                onDismiss: () => _dismissGatewayNotice(item),
+              );
             }
 
             final msg = item as Map<String, dynamic>;
