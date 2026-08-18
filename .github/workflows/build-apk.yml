@@ -46,8 +46,8 @@ jobs:
 
       - name: Verify release identity and upgrade versionCode
         env:
-          MINIMUM_INSTALLED_VERSION_CODE: '2136'
-          REQUIRED_BASE_VERSION_CODE: '2137'
+          MINIMUM_INSTALLED_VERSION_CODE: '2137'
+          REQUIRED_BASE_VERSION_CODE: '2138'
         run: |
           python3 - <<'PY'
           import os

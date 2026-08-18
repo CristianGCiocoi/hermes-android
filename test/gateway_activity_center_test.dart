@@ -236,4 +236,68 @@ void main() {
     expect(find.textContaining('atlas-document-synthesis'), findsOneWidget);
     controller.dispose();
   });
+
+  testWidgets(
+    'Activity Center excludes foreground work and keeps only tool failures',
+    (tester) async {
+      final controller = GatewayActivityCenterController(
+        sessionIdentity: 'connection-a|session-distinct-projections',
+        dismissalStore: _FakeDismissalStore(),
+      );
+      await controller.initialize();
+      controller.upsertTool(
+        const GatewayToolActivity(
+          toolId: 'tool-complete',
+          name: 'search_files',
+          phase: GatewayToolActivityPhase.completed,
+        ),
+      );
+      controller.upsertTool(
+        const GatewayToolActivity(
+          toolId: 'tool-failed',
+          name: 'read_file',
+          phase: GatewayToolActivityPhase.failed,
+          detail: 'Synthetic failure',
+        ),
+      );
+      controller.upsertSubagent(
+        const GatewaySubagentActivity(
+          id: 'subagent-running',
+          goal: 'Foreground delegated task',
+          phase: GatewaySubagentPhase.running,
+        ),
+      );
+      controller.setTurnStatus(
+        const GatewayTurnStatus(kind: 'working', text: 'Foreground status'),
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Builder(
+              builder: (context) => FilledButton(
+                onPressed: () => showModalBottomSheet<void>(
+                  context: context,
+                  isScrollControlled: true,
+                  builder: (_) =>
+                      GatewayActivityCenterSheet(controller: controller),
+                ),
+                child: const Text('Open'),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.text('Open'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Errors'), findsOneWidget);
+      expect(find.text('Read file'), findsOneWidget);
+      expect(find.text('Search files'), findsNothing);
+      expect(find.text('Foreground delegated task'), findsNothing);
+      expect(find.text('Foreground status'), findsNothing);
+      expect(find.text('Delegated tasks'), findsNothing);
+      controller.dispose();
+    },
+  );
 }

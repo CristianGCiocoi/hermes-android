@@ -4,6 +4,27 @@ All notable changes to this project are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Release notes for
 versions prior to 1.0.7 are in the **What's new** sections of the [README](README.md).
 
+## [1.0.26-hermesapk.26] - 2026-08-18
+
+### Fixed
+
+- The inline transcript and the top-right Activity Center now expose distinct
+  projections of the same Gateway state instead of duplicating foreground
+  tools, delegated tasks, and current-turn status.
+- Foreground Reasoning, tools, and delegated work remain collapsed alongside
+  the response. The Activity Center is reserved for recovery state, input
+  requests, notifications, tool failures, background results, and reviews.
+- The Activity badge continues to count only items that need attention; normal
+  completed foreground work does not create a badge or duplicate history.
+
+### Validation
+
+- Generic Gateway behavior and the optional interaction-mode capability are
+  unchanged from `.25`.
+- Flutter analysis passes with zero issues; all 389 Flutter tests pass,
+  including the focused Activity projection, scroll, interaction-mode, and
+  clarification regressions.
+
 ## [1.0.25-hermesapk.25] - 2026-08-18
 
 ### Added

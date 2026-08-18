@@ -20,13 +20,14 @@ class GatewayActivityCenterSheet extends StatelessWidget {
       builder: (context, scrollController) => AnimatedBuilder(
         animation: controller,
         builder: (context, _) {
+          final failedTools = controller.tools
+              .where((activity) => activity.isFailed)
+              .toList(growable: false);
           final hasContent =
               controller.legacyTransportFallback ||
               controller.needsInput ||
-              controller.turnStatus != null ||
               controller.notifications.isNotEmpty ||
-              controller.tools.isNotEmpty ||
-              controller.subagents.isNotEmpty ||
+              failedTools.isNotEmpty ||
               controller.notices.isNotEmpty;
           return SafeArea(
             top: false,
@@ -88,14 +89,6 @@ class GatewayActivityCenterSheet extends StatelessWidget {
                         detail: 'Hermes is waiting for your response.',
                       ),
                     ),
-                  if (controller.turnStatus case final status?)
-                    SliverToBoxAdapter(
-                      child: _StatusTile(
-                        icon: Icons.sync,
-                        title: 'Current status',
-                        detail: status.text,
-                      ),
-                    ),
                   if (controller.notifications.isNotEmpty)
                     _section(
                       context,
@@ -113,54 +106,17 @@ class GatewayActivityCenterSheet extends StatelessWidget {
                         ),
                       ),
                     ),
-                  if (controller.tools.isNotEmpty)
+                  if (failedTools.isNotEmpty)
                     _section(
                       context,
-                      'Tools',
-                      controller.tools.map(
+                      'Errors',
+                      failedTools.map(
                         (activity) => ListTile(
-                          leading: activity.isTerminal
-                              ? Icon(
-                                  activity.isFailed
-                                      ? Icons.error_outline
-                                      : Icons.check_circle_outline,
-                                )
-                              : const SizedBox.square(
-                                  dimension: 20,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                  ),
-                                ),
+                          leading: const Icon(Icons.error_outline),
                           title: Text(activity.displayName),
                           subtitle: Text(
                             [
                               activity.statusLabel,
-                              if (activity.detail != null) activity.detail!,
-                            ].join(' • '),
-                            maxLines: 3,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                      ),
-                    ),
-                  if (controller.subagents.isNotEmpty)
-                    _section(
-                      context,
-                      'Delegated tasks',
-                      controller.subagents.map(
-                        (activity) => ListTile(
-                          leading: activity.isComplete
-                              ? const Icon(Icons.check_circle_outline)
-                              : const SizedBox.square(
-                                  dimension: 20,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                  ),
-                                ),
-                          title: Text(activity.goal),
-                          subtitle: Text(
-                            [
-                              activity.phase.name,
                               if (activity.detail != null) activity.detail!,
                             ].join(' • '),
                             maxLines: 3,
@@ -211,13 +167,14 @@ class GatewayActivityCenterSheet extends StatelessWidget {
 
   static String _summary(GatewayActivityCenterController controller) {
     if (controller.needsInput) return 'Needs your input';
-    if (controller.runningCount > 0) {
-      return '${controller.runningCount} running';
+    if (controller.failedCount > 0) {
+      return '${controller.failedCount} '
+          '${controller.failedCount == 1 ? 'error' : 'errors'}';
     }
-    final completed = controller.tools.length + controller.subagents.length;
-    return completed == 0
-        ? 'Session status and history'
-        : '$completed recorded';
+    if (controller.notices.isNotEmpty) return 'Background results and reviews';
+    if (controller.notifications.isNotEmpty) return 'Session notices';
+    if (controller.legacyTransportFallback) return 'Recovery status';
+    return 'Nothing needs attention';
   }
 
   static SliverMainAxisGroup _section(

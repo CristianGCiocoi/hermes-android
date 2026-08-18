@@ -94,9 +94,11 @@ class GatewayActivityNoticeEntry {
 
 /// The single session-scoped source of truth for Gateway operational UI.
 ///
-/// Transcript cards and the Activity Center both consume this controller. It
-/// intentionally stores only dismissal digests on disk; review/background text
-/// remains memory-only and authoritative Gateway events remain server-owned.
+/// Transcript cards and the Activity Center consume distinct projections of
+/// this controller. Foreground tools and delegated work stay in the transcript;
+/// the center is reserved for attention, recovery, errors, and durable notices.
+/// It intentionally stores only dismissal digests on disk; review/background
+/// text remains memory-only and authoritative Gateway events remain server-owned.
 class GatewayActivityCenterController extends ChangeNotifier {
   static const _maxNotices = 20;
   static const _maxCachedSessions = 100;
