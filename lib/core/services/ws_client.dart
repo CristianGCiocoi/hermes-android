@@ -353,6 +353,40 @@ typedef StreamCallback = void Function(StreamEvent event);
 typedef ConnectionCallback = void Function(bool connected);
 typedef GatewayReadyCallback = void Function(Map<String, dynamic> frame);
 
+class GatewaySessionOpenResult {
+  final String sessionId;
+  final bool? effectiveFullControl;
+
+  const GatewaySessionOpenResult({
+    required this.sessionId,
+    required this.effectiveFullControl,
+  });
+
+  factory GatewaySessionOpenResult.fromResponse(
+    Map<String, dynamic> response, {
+    required String fallbackSessionId,
+  }) {
+    final result = response['result'];
+    final rawSessionId = result is Map ? result['session_id'] : null;
+    final sessionId =
+        rawSessionId is String &&
+            rawSessionId.isNotEmpty &&
+            rawSessionId.length <= 256 &&
+            rawSessionId.trim() == rawSessionId &&
+            !rawSessionId.codeUnits.any(
+              (unit) => unit < 32 || (unit >= 127 && unit <= 159),
+            )
+        ? rawSessionId
+        : fallbackSessionId;
+    final info = result is Map ? result['info'] : null;
+    final yolo = info is Map ? info['yolo'] : null;
+    return GatewaySessionOpenResult(
+      sessionId: sessionId,
+      effectiveFullControl: yolo is bool ? yolo : null,
+    );
+  }
+}
+
 /// WebSocket client for the Hermes JSON-RPC gateway.
 class WsClient {
   final String baseUrl;
@@ -1005,6 +1039,13 @@ class WsClient {
 
   /// Resume an existing session.
   Future<String> resumeSession(String sessionId, {String? profile}) async {
+    return (await resumeSessionWithInfo(sessionId, profile: profile)).sessionId;
+  }
+
+  Future<GatewaySessionOpenResult> resumeSessionWithInfo(
+    String sessionId, {
+    String? profile,
+  }) async {
     final result = await send('session.resume', {
       'session_id': sessionId,
       'profile': ?profile,
@@ -1016,7 +1057,10 @@ class WsClient {
         fallbackMessage: 'Unknown error',
       );
     }
-    return result['result']?['session_id'] as String? ?? sessionId;
+    return GatewaySessionOpenResult.fromResponse(
+      result,
+      fallbackSessionId: sessionId,
+    );
   }
 
   Future<void> setSessionTitle(String sessionId, String title) async {
@@ -1307,6 +1351,16 @@ class WsClient {
     String sessionId, {
     String? profile,
   }) async {
+    return (await createOrResumeSessionWithInfo(
+      sessionId,
+      profile: profile,
+    )).sessionId;
+  }
+
+  Future<GatewaySessionOpenResult> createOrResumeSessionWithInfo(
+    String sessionId, {
+    String? profile,
+  }) async {
     final result = await send('session.create', {
       'session_id': sessionId,
       'profile': ?profile,
@@ -1318,7 +1372,22 @@ class WsClient {
         fallbackMessage: 'Unknown error',
       );
     }
-    return result['result']?['session_id'] as String? ?? sessionId;
+    return GatewaySessionOpenResult.fromResponse(
+      result,
+      fallbackSessionId: sessionId,
+    );
+  }
+
+  void addSessionEventListener(String sessionId, StreamCallback listener) {
+    _sessionStreams.putIfAbsent(sessionId, () => []).add(listener);
+  }
+
+  void removeSessionEventListener(String sessionId, StreamCallback listener) {
+    final listeners = _sessionStreams[sessionId];
+    listeners?.remove(listener);
+    if (listeners != null && listeners.isEmpty) {
+      _sessionStreams.remove(sessionId);
+    }
   }
 
   /// Applies a model only to one live gateway session.  Hermes interprets the
@@ -1398,6 +1467,42 @@ class WsClient {
         fallbackMessage: 'Reasoning effort switch failed',
       );
     }
+  }
+
+  /// Enables or disables approval bypass for exactly one live session.
+  ///
+  /// The explicit `scope=session` is a safety invariant: Android must never
+  /// mutate the persistent global approvals policy used by other clients.
+  Future<bool> setSessionFullControl({
+    required String sessionId,
+    required bool enabled,
+  }) async {
+    final response = await send('config.set', {
+      'session_id': sessionId,
+      'key': 'yolo',
+      'value': enabled ? '1' : '0',
+      'scope': 'session',
+    });
+    final error = response['error'];
+    if (error != null) {
+      throw _gatewayResponseError(
+        'config.set',
+        error,
+        fallbackMessage: 'Permission level switch failed',
+      );
+    }
+    final result = response['result'];
+    final expected = enabled ? '1' : '0';
+    if (result is! Map ||
+        result['key'] != 'yolo' ||
+        result['scope'] != 'session' ||
+        result['value'] != expected) {
+      throw JsonRpcError(
+        'config.set',
+        'Gateway returned an invalid session permission receipt',
+      );
+    }
+    return enabled;
   }
 
   static const validReasoningEfforts = <String>{

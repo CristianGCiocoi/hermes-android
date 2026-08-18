@@ -12,6 +12,8 @@ typedef DesktopAsyncEventCallback =
     void Function(String mobileSessionId, StreamEvent event);
 typedef DesktopConnectionCallback =
     void Function(DesktopConnectionState connectionState);
+typedef DesktopSessionPermissionCallback =
+    void Function(String mobileSessionId, bool effectiveFullControl);
 
 enum DesktopConnectionState {
   disconnected,
@@ -33,8 +35,10 @@ class DesktopGatewayClient {
   final String? _atlasProfile;
   WsClient? _ws;
   final Map<String, String> _gatewaySessionIds = {};
+  final Map<String, bool> _effectiveFullControl = {};
   DesktopAsyncEventCallback? _asyncEventListener;
   DesktopConnectionCallback? _connectionListener;
+  DesktopSessionPermissionCallback? _sessionPermissionListener;
   GatewayTurnCoordinatorRegistry? _turnCoordinatorRegistry;
 
   static const _asyncEventTypes = {
@@ -48,6 +52,7 @@ class DesktopGatewayClient {
     'subagent.tool',
     'subagent.progress',
     'subagent.complete',
+    'session.info',
   };
 
   DesktopGatewayClient._({
@@ -109,9 +114,13 @@ class DesktopGatewayClient {
     if (mappedSessionId != null) {
       return _DesktopGatewaySession(client, mappedSessionId);
     }
-    final gatewaySessionId = await _resumeOrCreate(client, mobileSessionId);
-    _gatewaySessionIds[mobileSessionId] = gatewaySessionId;
-    return _DesktopGatewaySession(client, gatewaySessionId);
+    final opened = await _resumeOrCreate(client, mobileSessionId);
+    _gatewaySessionIds[mobileSessionId] = opened.sessionId;
+    final effective = opened.effectiveFullControl;
+    if (effective != null) {
+      _recordEffectiveFullControl(mobileSessionId, effective);
+    }
+    return _DesktopGatewaySession(client, opened.sessionId);
   }
 
   Future<WsClient> _connectSocket() async {
@@ -125,6 +134,7 @@ class DesktopGatewayClient {
     );
     existing?.close();
     _gatewaySessionIds.clear();
+    _effectiveFullControl.clear();
     final ticket = await _dashboard.mintWebSocketTicket();
     final client = WsClient(_baseUrl, ticket: ticket);
     _installAsyncEventBridge(client);
@@ -133,6 +143,7 @@ class DesktopGatewayClient {
         _connectionListener?.call(DesktopConnectionState.connected);
       } else if (identical(_ws, client)) {
         _gatewaySessionIds.clear();
+        _effectiveFullControl.clear();
         _connectionListener?.call(DesktopConnectionState.disconnected);
       }
     };
@@ -148,12 +159,12 @@ class DesktopGatewayClient {
     }
   }
 
-  Future<String> _resumeOrCreate(
+  Future<GatewaySessionOpenResult> _resumeOrCreate(
     WsClient client,
     String mobileSessionId,
   ) async {
     try {
-      return await client.resumeSession(
+      return await client.resumeSessionWithInfo(
         mobileSessionId,
         profile: _atlasProfile,
       );
@@ -165,15 +176,16 @@ class DesktopGatewayClient {
       // New mobile chats do not exist in Hermes yet. Create them with the
       // mobile-generated ID so REST history and the Desktop runtime share one
       // stable identity. Existing sessions always take the resume path.
-      return client.createOrResumeSession(
+      return client.createOrResumeSessionWithInfo(
         mobileSessionId,
         profile: _atlasProfile,
       );
     }
   }
 
-  Future<void> ensureSession(String sessionId) async {
+  Future<bool?> ensureSession(String sessionId) async {
     await _connect(sessionId);
+    return _effectiveFullControl[sessionId];
   }
 
   /// Creates the source-only recovery-v2 registry without changing any legacy
@@ -194,6 +206,12 @@ class DesktopGatewayClient {
 
   void setConnectionListener(DesktopConnectionCallback? listener) {
     _connectionListener = listener;
+  }
+
+  void setSessionPermissionListener(
+    DesktopSessionPermissionCallback? listener,
+  ) {
+    _sessionPermissionListener = listener;
   }
 
   Future<RemoteFileAttachment> attachFile({
@@ -296,8 +314,20 @@ class DesktopGatewayClient {
         mobileSessionId = _gatewaySessionIds.keys.single;
       }
       if (mobileSessionId == null) return;
+      if (event.type == 'session.info') {
+        final yolo = event.data['yolo'];
+        if (yolo is bool) {
+          _recordEffectiveFullControl(mobileSessionId, yolo);
+        }
+        return;
+      }
       _asyncEventListener?.call(mobileSessionId, event);
     };
+  }
+
+  void _recordEffectiveFullControl(String mobileSessionId, bool enabled) {
+    _effectiveFullControl[mobileSessionId] = enabled;
+    _sessionPermissionListener?.call(mobileSessionId, enabled);
   }
 
   /// Interrupts the active turn in the Desktop gateway runtime.
@@ -394,6 +424,41 @@ class DesktopGatewayClient {
     );
   }
 
+  /// Changes approval bypass for one mapped chat and waits for the gateway's
+  /// authoritative effective state. A global server policy can keep effective
+  /// Full control enabled even after the per-session override is disabled.
+  Future<bool> setSessionFullControl({
+    required String sessionId,
+    required bool enabled,
+  }) async {
+    final gateway = await _connect(sessionId);
+    final effective = Completer<bool>();
+    void listener(StreamEvent event) {
+      if (event.type != 'session.info') return;
+      final yolo = event.data['yolo'];
+      if (yolo is bool && !effective.isCompleted) effective.complete(yolo);
+    }
+
+    gateway.client.addSessionEventListener(gateway.sessionId, listener);
+    try {
+      await gateway.client.setSessionFullControl(
+        sessionId: gateway.sessionId,
+        enabled: enabled,
+      );
+      final reported = await effective.future.timeout(
+        const Duration(seconds: 5),
+        onTimeout: () => throw JsonRpcError(
+          'session.info',
+          'Gateway did not confirm the effective permission level',
+        ),
+      );
+      _recordEffectiveFullControl(sessionId, reported);
+      return reported;
+    } finally {
+      gateway.client.removeSessionEventListener(gateway.sessionId, listener);
+    }
+  }
+
   Future<void> renameSession({
     required String sessionId,
     required String title,
@@ -444,9 +509,11 @@ class DesktopGatewayClient {
   void close() {
     _asyncEventListener = null;
     _connectionListener = null;
+    _sessionPermissionListener = null;
     _ws?.close();
     _ws = null;
     _gatewaySessionIds.clear();
+    _effectiveFullControl.clear();
     final turnCoordinatorRegistry = _turnCoordinatorRegistry;
     _turnCoordinatorRegistry = null;
     if (turnCoordinatorRegistry != null) {

@@ -198,6 +198,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   bool _sessionModelOverride = false;
   bool _loadingModelOptions = false;
   bool _changingModel = false;
+  bool? _effectiveFullControl;
+  bool _changingPermission = false;
   bool _sending = false;
   bool _streaming = false;
   _ResponseTransport _activeResponseTransport = _ResponseTransport.none;
@@ -283,7 +285,17 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         );
         _desktopGateway!.setAsyncEventListener(_handleDesktopAsyncEvent);
         _desktopGateway!.setConnectionListener((state) {
-          if (mounted) setState(() => _desktopConnectionState = state);
+          if (!mounted) return;
+          setState(() {
+            _desktopConnectionState = state;
+            if (state != DesktopConnectionState.connected) {
+              _effectiveFullControl = null;
+            }
+          });
+        });
+        _desktopGateway!.setSessionPermissionListener((sessionId, enabled) {
+          if (!mounted || sessionId != widget.session.id) return;
+          setState(() => _effectiveFullControl = enabled);
         });
         unawaited(_ensureDesktopSession());
       } on ArgumentError {
@@ -351,6 +363,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       ),
     );
     _desktopGateway?.setAsyncEventListener(null);
+    _desktopGateway?.setSessionPermissionListener(null);
     _desktopGateway?.close();
     _textController.dispose();
     _scrollController.removeListener(_onScroll);
@@ -382,7 +395,10 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     final gateway = _desktopGateway;
     if (gateway == null) return;
     try {
-      await gateway.ensureSession(widget.session.id);
+      final effective = await gateway.ensureSession(widget.session.id);
+      if (mounted && effective != null) {
+        setState(() => _effectiveFullControl = effective);
+      }
     } catch (_) {
       // The composer remains available. The next send retries with a fresh
       // single-use ticket and surfaces an actionable error if it still fails.
@@ -1458,6 +1474,123 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       );
     } finally {
       if (mounted) setState(() => _loadingModelOptions = false);
+    }
+  }
+
+  Future<void> _showPermissionSelector() async {
+    final desktopGateway = _desktopGateway;
+    if (desktopGateway == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Session permissions require a configured Desktop Gateway.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    final selection = await showModalBottomSheet<bool>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const ListTile(
+              leading: Icon(Icons.admin_panel_settings_outlined),
+              title: Text('Permissions for this chat'),
+              subtitle: Text(
+                'This changes only the current live session. It never changes the server-wide policy.',
+              ),
+            ),
+            ListTile(
+              key: const Key('permission-standard-option'),
+              leading: Icon(
+                _effectiveFullControl == false
+                    ? Icons.check_circle
+                    : Icons.verified_user_outlined,
+              ),
+              title: const Text('Standard (server policy)'),
+              subtitle: const Text(
+                'Hermes asks for approval when the server policy requires it.',
+              ),
+              onTap: () => Navigator.pop(sheetContext, false),
+            ),
+            ListTile(
+              key: const Key('permission-full-control-option'),
+              leading: Icon(
+                _effectiveFullControl == true
+                    ? Icons.check_circle
+                    : Icons.bolt_outlined,
+              ),
+              title: const Text('Full control'),
+              subtitle: const Text(
+                'Bypasses approval prompts for this live session. High risk.',
+              ),
+              onTap: () => Navigator.pop(sheetContext, true),
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+    if (selection == null || !mounted) return;
+
+    if (selection && _effectiveFullControl != true) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Enable Full control?'),
+          content: const Text(
+            'Hermes tools and commands may run without approval prompts in this chat. '
+            'Use it only when you trust the task and its inputs. The setting is limited to this live session.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              key: const Key('confirm-full-control'),
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text('Enable Full control'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true || !mounted) return;
+    }
+
+    await _setSessionFullControl(selection);
+  }
+
+  Future<void> _setSessionFullControl(bool enabled) async {
+    final desktopGateway = _desktopGateway;
+    if (desktopGateway == null || _changingPermission) return;
+    setState(() => _changingPermission = true);
+    try {
+      final effective = await desktopGateway.setSessionFullControl(
+        sessionId: widget.session.id,
+        enabled: enabled,
+      );
+      if (!mounted) return;
+      setState(() => _effectiveFullControl = effective);
+      final message = !enabled && effective
+          ? 'The session override is off, but the server policy still reports Full control.'
+          : effective
+          ? 'Full control is enabled only for this live session.'
+          : 'Standard permissions now follow the server policy.';
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(message)));
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Permission level was not changed: $error')),
+      );
+    } finally {
+      if (mounted) setState(() => _changingPermission = false);
     }
   }
 
@@ -2864,46 +2997,123 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                   ],
                 ),
               ),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(4, 2, 4, 4),
-                child: Semantics(
-                  label: 'Choose chat model',
-                  value: _sessionModel ?? widget.session.model,
-                  button: true,
-                  enabled:
-                      !(_sending ||
-                          _streaming ||
-                          _loadingModelOptions ||
-                          _changingModel),
-                  excludeSemantics: true,
-                  child: ConstrainedBox(
-                    constraints: const BoxConstraints(minHeight: 48),
-                    child: TextButton.icon(
-                      onPressed:
-                          (_sending ||
+            Padding(
+              padding: const EdgeInsets.fromLTRB(4, 2, 4, 4),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Semantics(
+                      label: 'Choose chat model',
+                      value: _sessionModel ?? widget.session.model,
+                      button: true,
+                      enabled:
+                          !(_sending ||
                               _streaming ||
                               _loadingModelOptions ||
-                              _changingModel)
-                          ? null
-                          : _showModelSelector,
-                      icon: _loadingModelOptions || _changingModel
-                          ? const SizedBox(
-                              width: 16,
-                              height: 16,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Icon(Icons.tune, size: 18),
-                      label: Text(
-                        '${_sessionModel ?? widget.session.model} • '
-                        '${_sessionModelOverride ? 'this chat' : 'profile default'}',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
+                              _changingModel),
+                      excludeSemantics: true,
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(minHeight: 48),
+                        child: TextButton.icon(
+                          onPressed:
+                              (_sending ||
+                                  _streaming ||
+                                  _loadingModelOptions ||
+                                  _changingModel)
+                              ? null
+                              : _showModelSelector,
+                          icon: _loadingModelOptions || _changingModel
+                              ? const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : const Icon(Icons.tune, size: 18),
+                          label: Text(
+                            '${_sessionModel ?? widget.session.model} • '
+                            '${_sessionModelOverride ? 'this chat' : 'profile default'}',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
                       ),
                     ),
                   ),
-                ),
+                  Semantics(
+                    label: 'Choose permission level',
+                    value: _effectiveFullControl == null
+                        ? 'Checking server'
+                        : _effectiveFullControl!
+                        ? 'Full control'
+                        : 'Standard',
+                    button: true,
+                    enabled: !(_sending || _streaming || _changingPermission),
+                    excludeSemantics: true,
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(minHeight: 48),
+                      child:
+                          MediaQuery.textScalerOf(context).scale(1) >= 1.5 ||
+                              MediaQuery.sizeOf(context).width < 360
+                          ? IconButton(
+                              key: const Key('chat-permission-selector'),
+                              tooltip: _effectiveFullControl == true
+                                  ? 'Full control'
+                                  : 'Standard permissions',
+                              onPressed:
+                                  (_sending ||
+                                      _streaming ||
+                                      _changingPermission)
+                                  ? null
+                                  : _showPermissionSelector,
+                              icon: _changingPermission
+                                  ? const SizedBox(
+                                      width: 16,
+                                      height: 16,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                      ),
+                                    )
+                                  : Icon(
+                                      _effectiveFullControl == true
+                                          ? Icons.bolt
+                                          : Icons.verified_user_outlined,
+                                    ),
+                            )
+                          : TextButton.icon(
+                              key: const Key('chat-permission-selector'),
+                              onPressed:
+                                  (_sending ||
+                                      _streaming ||
+                                      _changingPermission)
+                                  ? null
+                                  : _showPermissionSelector,
+                              icon: _changingPermission
+                                  ? const SizedBox(
+                                      width: 16,
+                                      height: 16,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                      ),
+                                    )
+                                  : Icon(
+                                      _effectiveFullControl == true
+                                          ? Icons.bolt
+                                          : Icons.verified_user_outlined,
+                                      size: 18,
+                                    ),
+                              label: Text(
+                                _effectiveFullControl == null
+                                    ? 'Permissions'
+                                    : _effectiveFullControl!
+                                    ? 'Full control'
+                                    : 'Standard',
+                              ),
+                            ),
+                    ),
+                  ),
+                ],
               ),
             ),
             if (_pendingPromotions.isNotEmpty)
