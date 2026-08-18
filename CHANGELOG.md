@@ -4,6 +4,38 @@ All notable changes to this project are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Release notes for
 versions prior to 1.0.7 are in the **What's new** sections of the [README](README.md).
 
+## [1.0.24-hermesapk.24] - 2026-08-18
+
+### Added
+
+- A centralized Hermes Activity Center with explicit lifecycle and dismissible
+  review notices, replacing permanent review cards in the transcript.
+- Native creation of Hermes Projects from the Projects screen while preserving
+  the server-owned `projects.list` / `projects.set_active` authority.
+- A per-session permission selector for `Standard` and `Full control`, with
+  strict Gateway readback and fail-closed handling of unsupported values.
+- A unified per-message action menu for Copy, Select text, Share, Read aloud,
+  Edit and resend, and Regenerate response.
+- Five application color palettes and an optional high-contrast mode, applied
+  consistently to light and dark themes.
+
+### Changed
+
+- Streaming answers remain after Reasoning and Hermes activity, activity cards
+  start collapsed, long conversations open at the latest content, and a
+  persistent Latest affordance returns to the end without forcing scroll while
+  the user is reading earlier messages.
+- Standard conversations continue to use the existing individual
+  `clarify.request` / `clarify.respond` flow. Interview and Grill are reserved
+  for a later versioned Agent/Gateway contract and are not simulated locally.
+
+### Validation
+
+- Flutter static analysis passes with zero issues.
+- All 379 Flutter tests pass, including palette persistence, contrast,
+  streaming/scroll, Projects, permissions, Activity Center, and message-menu
+  regressions.
+
 ## [1.0.14-hermesapk.14] - 2026-07-30
 
 ### Added
