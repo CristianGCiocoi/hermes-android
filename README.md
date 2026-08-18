@@ -23,7 +23,7 @@ official Hermes Agent or Nous Research release.
 
 ## Current release
 
-- Version: **1.0.13-hermesapk.13**
+- Version: **1.0.26-hermesapk.26**
 - Test package: `com.hermesagent.hermes_android.dev`
 - Recommended APK for modern phones: ARM64 debug test build from this
   repository's Releases page.
@@ -47,10 +47,19 @@ official Hermes Agent or Nous Research release.
 - Search, Rename, Branch, and Delete for remote conversations.
 - Native approval, sudo/secret, clarification, reasoning, tool activity,
   notifications, background results, reviews, and subagent status.
+- A dedicated Activity Center for attention-bearing events; foreground
+  reasoning, tools, and delegated work remain collapsed in the transcript and
+  are no longer duplicated in the top-right panel.
+- Native Hermes Projects, per-session Standard/Full control permissions,
+  selectable color palettes, improved long-chat scrolling, and consolidated
+  message actions.
+- Optional capability-gated Standard/Interview/Grill modes. Generic and older
+  Gateways remain fully compatible in Standard mode and receive no new mode
+  RPCs.
 - Persistent reconnect/session resume and defensive retry handling.
 - Optional, disabled-by-default same-profile cross-device open contract. A canonical `(profile_id, session_id)` reference opens only after one injected Hermes owner adapter returns the exact verification, Session, and authenticated Profile route; the client creates no SessionStore and copies no conversation, draft, attachment, credential, scroll, typing, or device state.
 
-See [CHANGELOG.md](CHANGELOG.md) for the complete `.13` change list and
+See [CHANGELOG.md](CHANGELOG.md) for the complete `.26` change list and
 [docs/HERMESAPK_DEVELOPMENT_LOG.md](docs/HERMESAPK_DEVELOPMENT_LOG.md) for the
 sanitized implementation and validation record.
 
@@ -128,7 +137,7 @@ Download the community test APK from this repository's
 For most Android phones, install the arm64 APK:
 
 ```bash
-adb install Hermes-Agent-Dev-1.0.13-hermesapk.13-arm64-debug.apk
+adb install -r Hermes-Agent-Dev-1.0.26-hermesapk.26-arm64-debug.apk
 ```
 
 If sideloading directly on Android, enable **Install unknown apps** for your browser or file manager, then open the downloaded APK.
