@@ -77,10 +77,21 @@ void main() {
       final coordinator = ChatScrollCoordinator();
       coordinator.beginStreaming(isNearEnd: true);
 
-      coordinator.updateFromUserScroll(isNearEnd: false);
+      coordinator.updateFromUserScroll(isNearEnd: true, movedAwayFromEnd: true);
       expect(coordinator.streamingContentChanged(), isNull);
 
       coordinator.updateFromUserScroll(isNearEnd: true);
+      expect(coordinator.streamingContentChanged(), isNotNull);
+    });
+
+    test('Latest explicitly resumes a suspended streaming follow', () {
+      final coordinator = ChatScrollCoordinator();
+      coordinator.beginStreaming(isNearEnd: true);
+      coordinator.updateFromUserScroll(isNearEnd: true, movedAwayFromEnd: true);
+
+      expect(coordinator.shouldFollowStreaming, isFalse);
+      coordinator.resumeStreamingFollow();
+      expect(coordinator.shouldFollowStreaming, isTrue);
       expect(coordinator.streamingContentChanged(), isNotNull);
     });
   });
@@ -347,6 +358,170 @@ void main() {
         ]);
         await tester.pumpAndSettle();
         expect(controller.position.pixels, controller.position.maxScrollExtent);
+      },
+    );
+
+    testWidgets(
+      'small history gesture suspends streaming and Latest resumes follow',
+      (tester) async {
+        final remote = _ControlledRemotePrompt();
+        await _pumpChat(
+          tester,
+          client: _ControlledChatHttpClient(_longHistory()),
+          connectionId: 'gesture-follow',
+          sessionId: 'gesture-follow',
+          remoteSubmit: remote.submit,
+        );
+        final controller = _chatListController(tester);
+
+        await tester.enterText(
+          find.byType(TextField),
+          'stream and let me read',
+        );
+        await tester.tap(find.byTooltip('Send'));
+        await tester.pump();
+        await remote.started.future;
+        remote.emit('message.delta', {
+          'text': List.filled(30, 'first streaming paragraph').join('\n'),
+        });
+        await tester.pump();
+        await tester.pump();
+        expect(controller.position.pixels, controller.position.maxScrollExtent);
+
+        await tester.drag(find.byType(ListView).first, const Offset(0, 80));
+        await tester.pump(const Duration(milliseconds: 500));
+        final readingPosition = controller.position.pixels;
+        final distanceFromEnd =
+            controller.position.maxScrollExtent - readingPosition;
+        expect(distanceFromEnd, greaterThan(1));
+        expect(distanceFromEnd, lessThan(200));
+        expect(find.bySemanticsLabel('Go to end'), findsOneWidget);
+
+        remote.emit('message.delta', {
+          'text': List.filled(10, 'more generated text').join('\n'),
+        });
+        await tester.pump();
+        await tester.pump();
+        expect(controller.position.pixels, closeTo(readingPosition, 0.01));
+
+        await tester.tap(find.bySemanticsLabel('Go to end'));
+        await tester.pump();
+        expect(controller.position.pixels, controller.position.maxScrollExtent);
+
+        remote.emit('message.delta', {'text': '\nfinal streamed line'});
+        await tester.pump();
+        await tester.pump();
+        expect(controller.position.pixels, controller.position.maxScrollExtent);
+
+        remote.finish();
+        await tester.pumpAndSettle();
+      },
+    );
+
+    testWidgets(
+      'renders reasoning then activity then the assistant answer collapsed',
+      (tester) async {
+        await _pumpChat(
+          tester,
+          client: _ControlledChatHttpClient([
+            {'role': 'user', 'content': 'Inspect the document'},
+            {
+              'role': 'tool',
+              'name': 'search_files',
+              'tool_call_id': 'tool-order-1',
+              'content':
+                  '<untrusted_tool_result source="search_files">safe fixture</untrusted_tool_result>',
+            },
+            {
+              'role': 'assistant',
+              'content': 'Ordered final answer',
+              '_gateway_reasoning': 'Ordered reasoning summary',
+              '_gateway_reasoning_verbose': true,
+            },
+          ]),
+          connectionId: 'transcript-order',
+          sessionId: 'transcript-order',
+        );
+
+        final reasoning = find.text('Reasoning');
+        final activity = find.text('Hermes activity');
+        final answer = find.text('Ordered final answer');
+        expect(reasoning, findsOneWidget);
+        expect(activity, findsOneWidget);
+        expect(answer, findsOneWidget);
+        expect(
+          tester.getTopLeft(reasoning).dy,
+          lessThan(tester.getTopLeft(activity).dy),
+        );
+        expect(
+          tester.getTopLeft(activity).dy,
+          lessThan(tester.getTopLeft(answer).dy),
+        );
+
+        final reasoningTile = tester.widget<ExpansionTile>(
+          find.ancestor(of: reasoning, matching: find.byType(ExpansionTile)),
+        );
+        final activityTile = tester.widget<ExpansionTile>(
+          find.ancestor(of: activity, matching: find.byType(ExpansionTile)),
+        );
+        expect(reasoningTile.initiallyExpanded, isFalse);
+        expect(activityTile.initiallyExpanded, isFalse);
+      },
+    );
+
+    testWidgets(
+      'live Remote deltas keep reasoning and activity before generated text',
+      (tester) async {
+        final remote = _ControlledRemotePrompt();
+        await _pumpChat(
+          tester,
+          client: _ControlledChatHttpClient(const []),
+          connectionId: 'live-transcript-order',
+          sessionId: 'live-transcript-order',
+          remoteSubmit: remote.submit,
+        );
+
+        await tester.enterText(find.byType(TextField), 'Check live ordering');
+        await tester.tap(find.byTooltip('Send'));
+        await tester.pump();
+        await remote.started.future;
+        remote.emit('reasoning.delta', {'text': 'Live reasoning summary'});
+        remote.emit('tool.start', {
+          'tool_id': 'live-tool-order-1',
+          'name': 'search_files',
+        });
+        remote.emit('message.delta', {'text': 'Live generated answer'});
+        await tester.pump();
+        await tester.pump();
+
+        final reasoning = find.text('Reasoning');
+        final activity = find.text('Hermes activity');
+        final answer = find.text('Live generated answer');
+        expect(reasoning, findsOneWidget);
+        expect(activity, findsOneWidget);
+        expect(answer, findsOneWidget);
+        expect(
+          tester.getTopLeft(reasoning).dy,
+          lessThan(tester.getTopLeft(activity).dy),
+        );
+        expect(
+          tester.getTopLeft(activity).dy,
+          lessThan(tester.getTopLeft(answer).dy),
+        );
+        expect(
+          tester
+              .widget<ExpansionTile>(
+                find.ancestor(
+                  of: activity,
+                  matching: find.byType(ExpansionTile),
+                ),
+              )
+              .initiallyExpanded,
+          isFalse,
+        );
+
+        remote.finish();
+        await tester.pump(const Duration(milliseconds: 300));
       },
     );
 

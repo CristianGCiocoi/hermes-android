@@ -76,9 +76,8 @@ const _reasoningEffortLabels = <String, String>{
 
 class _GatewayReasoningDisplay {
   final String text;
-  final bool initiallyExpanded;
 
-  const _GatewayReasoningDisplay(this.text, this.initiallyExpanded);
+  const _GatewayReasoningDisplay(this.text);
 }
 
 enum _ResponseTransport { none, rest, desktop }
@@ -561,8 +560,14 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         (notification is OverscrollNotification &&
             notification.dragDetails != null);
     if (isDirectUserScroll) {
+      final scrollDelta = switch (notification) {
+        ScrollUpdateNotification() => notification.scrollDelta ?? 0,
+        OverscrollNotification() => notification.overscroll,
+        _ => 0.0,
+      };
       _scrollCoordinator.updateFromUserScroll(
         isNearEnd: _isNearEnd(notification.metrics),
+        movedAwayFromEnd: scrollDelta < 0,
       );
     }
     return false;
@@ -576,6 +581,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   }
 
   void _goToEnd() {
+    _scrollCoordinator.resumeStreamingFollow();
     _applyScrollTarget(const ChatScrollTarget.end());
   }
 
@@ -2767,7 +2773,10 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                 child: Stack(
                   children: [
                     Positioned.fill(child: _buildBody()),
-                    if (_endAffordanceController.isVisible)
+                    if (_endAffordanceController.isVisible ||
+                        (_streaming &&
+                            !_scrollCoordinator.shouldFollowStreaming &&
+                            !_endAffordanceController.isAtEnd))
                       Positioned(
                         right: 12,
                         bottom: 12,
@@ -3156,8 +3165,30 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     final displayMessages = <dynamic>[];
     final currentGroup = <GatewayToolActivity>[];
     String? lastUserPrompt;
+    var subagentsPlaced = false;
+    int? lastAssistantIndex;
 
-    for (final msg in _messages) {
+    for (var index = _messages.length - 1; index >= 0; index--) {
+      final message = _messages[index];
+      if (isToolResultMessage(message)) continue;
+      if ((message['role']?.toString() ?? 'assistant') == 'assistant') {
+        lastAssistantIndex = index;
+        break;
+      }
+    }
+
+    void flushCurrentGroup() {
+      if (currentGroup.isEmpty) return;
+      displayMessages.add(currentGroup.toList());
+      currentGroup.clear();
+    }
+
+    for (
+      var messageIndex = 0;
+      messageIndex < _messages.length;
+      messageIndex++
+    ) {
+      final msg = _messages[messageIndex];
       final role = (msg['role'] as String?) ?? 'assistant';
       if (isToolResultMessage(msg)) {
         if (toolQueue.isNotEmpty) {
@@ -3168,40 +3199,50 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       if (role != 'user' && role != 'assistant') continue;
       final content = stripToolResultText(messageContentToText(msg['content']));
       final reasoning = msg['_gateway_reasoning']?.toString() ?? '';
-      if (content.isEmpty && reasoning.trim().isEmpty) continue;
 
-      if (currentGroup.isNotEmpty) {
-        displayMessages.add(currentGroup.toList());
-        currentGroup.clear();
+      if (role == 'user') {
+        flushCurrentGroup();
+        if (content.isEmpty) continue;
+        lastUserPrompt = content;
+        displayMessages.add({...msg, '_display_content': content});
+        continue;
       }
-      if (role == 'assistant' && reasoning.trim().isNotEmpty) {
+
+      final isLatestAssistant = messageIndex == lastAssistantIndex;
+      if (reasoning.trim().isNotEmpty) {
+        displayMessages.add(_GatewayReasoningDisplay(reasoning));
+      }
+      flushCurrentGroup();
+
+      // Live Gateway activity has no stored tool-result message yet. Attach it
+      // to the latest assistant turn before its generated text.
+      if (isLatestAssistant && toolQueue.isNotEmpty) {
+        displayMessages.add(toolQueue.toList());
+        toolQueue.clear();
+      }
+      if (isLatestAssistant && _subagentActivities.isNotEmpty) {
         displayMessages.add(
-          _GatewayReasoningDisplay(
-            reasoning,
-            _verboseMode || msg['_gateway_reasoning_verbose'] == true,
-          ),
+          List<GatewaySubagentActivity>.from(_subagentActivities),
         );
+        subagentsPlaced = true;
       }
+
       if (content.isNotEmpty) {
-        if (role == 'user') lastUserPrompt = content;
         displayMessages.add({
           ...msg,
           '_display_content': content,
-          if (role == 'assistant' && lastUserPrompt != null)
-            '_retry_prompt': lastUserPrompt,
+          '_retry_prompt': ?lastUserPrompt,
         });
       }
     }
-    if (currentGroup.isNotEmpty) {
-      displayMessages.add(currentGroup.toList());
-    }
+    flushCurrentGroup();
 
     // Tools from SSE events that arrived during streaming but haven't been
     // matched to server messages yet — show them as a card.
     if (toolQueue.isNotEmpty) {
       displayMessages.add(toolQueue.toList());
     }
-    if (_subagentActivities.isNotEmpty) {
+    if (!subagentsPlaced && _subagentActivities.isNotEmpty) {
       displayMessages.add(
         List<GatewaySubagentActivity>.from(_subagentActivities),
       );
@@ -3223,19 +3264,13 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
             final item = displayMessages[index];
 
             if (item is List<GatewayToolActivity>) {
-              return GatewayActivityCard(
-                activities: item,
-                verbose: _verboseMode,
-              );
+              return GatewayActivityCard(activities: item);
             }
             if (item is List<GatewaySubagentActivity>) {
               return GatewaySubagentCard(activities: item);
             }
             if (item is _GatewayReasoningDisplay) {
-              return GatewayReasoningCard(
-                text: item.text,
-                initiallyExpanded: item.initiallyExpanded,
-              );
+              return GatewayReasoningCard(text: item.text);
             }
             if (item is GatewayNotice) {
               return GatewayNoticeCard(

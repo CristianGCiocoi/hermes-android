@@ -45,10 +45,24 @@ class ChatScrollCoordinator {
     _followStreaming = isNearEnd;
   }
 
-  /// Only direct user scrolling changes the sticky streaming-follow choice.
-  void updateFromUserScroll({required bool isNearEnd}) {
+  /// Direct user scrolling away suspends sticky follow immediately, including
+  /// inside the normal near-end threshold. Scrolling back near the end resumes
+  /// it without requiring the floating action.
+  void updateFromUserScroll({
+    required bool isNearEnd,
+    bool movedAwayFromEnd = false,
+  }) {
     if (!_streaming) return;
-    _followStreaming = isNearEnd;
+    if (movedAwayFromEnd) {
+      _followStreaming = false;
+      return;
+    }
+    if (isNearEnd) _followStreaming = true;
+  }
+
+  /// The explicit Latest action opts back into streaming follow.
+  void resumeStreamingFollow() {
+    if (_streaming) _followStreaming = true;
   }
 
   ChatScrollTarget? streamingContentChanged() {

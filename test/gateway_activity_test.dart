@@ -128,6 +128,15 @@ void main() {
       await tester.pump(const Duration(milliseconds: 300));
 
       expect(find.text('Hermes activity'), findsOneWidget);
+      final tile = tester.widget<ExpansionTile>(find.byType(ExpansionTile));
+      expect(tile.initiallyExpanded, isFalse);
+      expect(
+        find.text('Scanning gateway event handlers').hitTestable(),
+        findsNothing,
+      );
+
+      await tester.tap(find.text('Hermes activity'));
+      await tester.pump(const Duration(milliseconds: 300));
       expect(find.textContaining('Search files'), findsOneWidget);
       expect(find.text('Working'), findsOneWidget);
       expect(find.text('Scanning gateway event handlers'), findsOneWidget);
@@ -140,7 +149,6 @@ void main() {
         const MaterialApp(
           home: Scaffold(
             body: GatewayActivityCard(
-              verbose: true,
               activities: [
                 GatewayToolActivity(
                   toolId: 'tool-2',
@@ -154,6 +162,9 @@ void main() {
         ),
       );
       await tester.pump(const Duration(milliseconds: 300));
+
+      await tester.tap(find.text('Hermes activity'));
+      await tester.pumpAndSettle();
 
       expect(find.text('1 failed • 1 total'), findsOneWidget);
       expect(find.textContaining('Terminal'), findsOneWidget);
