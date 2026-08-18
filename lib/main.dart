@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'core/services/connection_manager.dart';
+import 'core/services/appearance_preference.dart';
 import 'core/services/gateway_turn_application_controller.dart';
 import 'core/services/text_size_preference.dart';
 import 'core/screens/session_list_screen.dart';
@@ -61,6 +62,10 @@ class HermesApp extends StatefulWidget {
   static TextSizePreference getTextSizePreference(SharedPreferences prefs) {
     return TextSizePreferenceStore(prefs).read();
   }
+
+  static AppearancePreference getAppearancePreference(SharedPreferences prefs) {
+    return AppearancePreferenceStore(prefs).read();
+  }
 }
 
 class HermesAppState extends State<HermesApp> {
@@ -77,58 +82,63 @@ class HermesAppState extends State<HermesApp> {
     if (mounted) setState(() {});
   }
 
+  Future<void> setAppearancePreference(AppearancePreference preference) async {
+    await AppearancePreferenceStore(widget.connManager.prefs).save(preference);
+    if (mounted) setState(() {});
+  }
+
+  ThemeData _buildTheme({
+    required Brightness brightness,
+    required AppearancePreference appearance,
+  }) {
+    final dark = brightness == Brightness.dark;
+    final scheme = ColorScheme.fromSeed(
+      seedColor: appearance.palette.seed,
+      brightness: brightness,
+      contrastLevel: appearance.highContrast ? 1 : 0,
+    );
+    return ThemeData(
+      colorScheme: scheme,
+      brightness: brightness,
+      useMaterial3: true,
+      scaffoldBackgroundColor: dark ? Colors.black : const Color(0xFFFAFAFA),
+      appBarTheme: AppBarTheme(
+        backgroundColor: dark ? Colors.black : Colors.white,
+        elevation: 0,
+        centerTitle: true,
+      ),
+      cardTheme: CardThemeData(
+        color: dark ? const Color(0xFF1A1A1A) : Colors.white,
+        elevation: 0,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+          side: BorderSide(
+            color: (dark ? Colors.white : Colors.grey).withValues(
+              alpha: dark ? 0.05 : 0.15,
+            ),
+          ),
+        ),
+      ),
+      floatingActionButtonTheme: FloatingActionButtonThemeData(
+        backgroundColor: scheme.primary,
+        foregroundColor: scheme.onPrimary,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    const gold = Color(0xFFD4AF37);
+    final appearance = HermesApp.getAppearancePreference(
+      widget.connManager.prefs,
+    );
 
     return MaterialApp(
       title: 'Hermes Agent',
       themeMode: HermesApp.getThemeMode(widget.connManager.prefs),
-      theme: ThemeData(
-        colorSchemeSeed: gold,
-        brightness: Brightness.light,
-        useMaterial3: true,
-        scaffoldBackgroundColor: const Color(0xFFFAFAFA),
-        appBarTheme: const AppBarTheme(
-          backgroundColor: Colors.white,
-          elevation: 0,
-          centerTitle: true,
-        ),
-        cardTheme: CardThemeData(
-          color: Colors.white,
-          elevation: 0,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
-            side: BorderSide(color: Colors.grey.withValues(alpha: 0.15)),
-          ),
-        ),
-        floatingActionButtonTheme: const FloatingActionButtonThemeData(
-          backgroundColor: gold,
-          foregroundColor: Colors.white,
-        ),
-      ),
-      darkTheme: ThemeData(
-        colorSchemeSeed: gold,
+      theme: _buildTheme(brightness: Brightness.light, appearance: appearance),
+      darkTheme: _buildTheme(
         brightness: Brightness.dark,
-        useMaterial3: true,
-        scaffoldBackgroundColor: Colors.black,
-        appBarTheme: const AppBarTheme(
-          backgroundColor: Colors.black,
-          elevation: 0,
-          centerTitle: true,
-        ),
-        cardTheme: CardThemeData(
-          color: const Color(0xFF1A1A1A),
-          elevation: 0,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
-            side: BorderSide(color: Colors.white.withValues(alpha: 0.05)),
-          ),
-        ),
-        floatingActionButtonTheme: const FloatingActionButtonThemeData(
-          backgroundColor: gold,
-          foregroundColor: Colors.black,
-        ),
+        appearance: appearance,
       ),
       builder: (context, child) {
         final systemMediaQuery = MediaQuery.of(context);

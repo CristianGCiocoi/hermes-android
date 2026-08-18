@@ -4,18 +4,23 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hermes_android/core/screens/chat_screen.dart';
+import 'package:hermes_android/core/services/appearance_preference.dart';
 
 void main() {
-  test('user bubble foreground passes WCAG AA in light and dark themes', () {
-    final ratio = _contrastRatio(
-      hermesUserMessageForeground,
-      hermesUserMessageBubbleBackground,
-    );
-
-    expect(ratio, greaterThanOrEqualTo(4.5));
-    // The pair is theme-independent, so the verified ratio applies to both.
-    expect(hermesUserMessageBubbleBackground, const Color(0xFFD4AF37));
-    expect(hermesUserMessageForeground, const Color(0xFF1C1B1F));
+  test('every palette user bubble passes WCAG AA in light and dark', () {
+    for (final palette in HermesColorPalette.values) {
+      for (final brightness in Brightness.values) {
+        final scheme = ColorScheme.fromSeed(
+          seedColor: palette.seed,
+          brightness: brightness,
+        );
+        expect(
+          _contrastRatio(scheme.onPrimaryContainer, scheme.primaryContainer),
+          greaterThanOrEqualTo(4.5),
+          reason: '${palette.name} ${brightness.name}',
+        );
+      }
+    }
   });
 
   testWidgets('message bubble copies its original Markdown content', (

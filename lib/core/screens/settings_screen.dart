@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/connection_manager.dart';
+import '../services/appearance_preference.dart';
 import '../widgets/text_size_settings_card.dart';
 import '../../main.dart';
 import 'package:package_info_plus/package_info_plus.dart';
@@ -319,6 +320,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _buildSectionHeader('Appearance'),
         _ThemeToggle(),
         const SizedBox(height: 8),
+        const _PalettePicker(),
+        const SizedBox(height: 8),
         TextSizeSettingsCard(
           preferences: context
               .findAncestorStateOfType<HermesAppState>()!
@@ -569,6 +572,79 @@ class _ThemeToggleState extends State<_ThemeToggle> {
         selected: {_mode},
         onSelectionChanged: (s) => _setMode(s.first),
         style: ButtonStyle(visualDensity: VisualDensity.compact),
+      ),
+    );
+  }
+}
+
+class _PalettePicker extends StatelessWidget {
+  const _PalettePicker();
+
+  @override
+  Widget build(BuildContext context) {
+    final root = context.findAncestorStateOfType<HermesAppState>()!;
+    final appearance = HermesApp.getAppearancePreference(
+      root.widget.connManager.prefs,
+    );
+
+    Future<void> update(AppearancePreference next) {
+      return root.setAppearancePreference(next);
+    }
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 14, 16, 8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Row(
+              children: [
+                Icon(Icons.palette_outlined),
+                SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    'Color palette',
+                    style: TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Changes the app accent locally. Status and error colors keep their meaning.',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final palette in HermesColorPalette.values)
+                  ChoiceChip(
+                    key: Key('palette-${palette.storageKey}'),
+                    selected: appearance.palette == palette,
+                    avatar: CircleAvatar(backgroundColor: palette.seed),
+                    label: Text(palette.label),
+                    onSelected: (_) =>
+                        update(appearance.copyWith(palette: palette)),
+                  ),
+              ],
+            ),
+            const Divider(height: 24),
+            SwitchListTile(
+              key: const Key('high-contrast-toggle'),
+              contentPadding: EdgeInsets.zero,
+              title: const Text('High contrast'),
+              subtitle: const Text(
+                'Strengthens separation between text, controls, and surfaces.',
+              ),
+              secondary: const Icon(Icons.contrast),
+              value: appearance.highContrast,
+              onChanged: (enabled) =>
+                  update(appearance.copyWith(highContrast: enabled)),
+            ),
+          ],
+        ),
       ),
     );
   }

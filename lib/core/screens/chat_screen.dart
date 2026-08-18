@@ -44,11 +44,6 @@ import '../widgets/gateway_insight_card.dart';
 import '../widgets/gateway_sensitive_prompt_dialog.dart';
 import '../widgets/voice_composer_controls.dart';
 
-/// These colors remain identical in light and dark themes. Their 8.15:1
-/// contrast ratio keeps normal user-message text above WCAG AA.
-const hermesUserMessageBubbleBackground = Color(0xFFD4AF37);
-const hermesUserMessageForeground = Color(0xFF1C1B1F);
-
 class _ModelChoice {
   final String provider;
   final String model;
@@ -3732,7 +3727,8 @@ class MessageBubble extends StatelessWidget {
     final isDark = theme.brightness == Brightness.dark;
 
     // Bubble colors
-    const userBubbleColor = hermesUserMessageBubbleBackground;
+    final userBubbleColor = theme.colorScheme.primaryContainer;
+    final userTextColor = theme.colorScheme.onPrimaryContainer;
     final assistantBubbleColor = isDark
         ? const Color(0xFF2A2A2A)
         : const Color(0xFFEAEAEA);
@@ -3791,7 +3787,7 @@ class MessageBubble extends StatelessWidget {
                           fontSize: 11,
                           fontFamily: 'monospace',
                           color: isUser
-                              ? hermesUserMessageForeground
+                              ? userTextColor
                               : (isDark ? Colors.grey[400] : Colors.grey[600]),
                         ),
                       ),
@@ -3806,9 +3802,7 @@ class MessageBubble extends StatelessWidget {
             selectable: true,
             styleSheet: MarkdownStyleSheet(
               p: (isUser
-                  ? theme.textTheme.bodyMedium?.copyWith(
-                      color: hermesUserMessageForeground,
-                    )
+                  ? theme.textTheme.bodyMedium?.copyWith(color: userTextColor)
                   : theme.textTheme.bodyMedium?.copyWith(
                       color: assistantTextColor,
                     )),
@@ -3816,37 +3810,31 @@ class MessageBubble extends StatelessWidget {
                 backgroundColor: (isUser ? Colors.white : Colors.black)
                     .withValues(alpha: 0.12),
                 fontFamily: 'monospace',
-                color: isUser ? hermesUserMessageForeground : null,
+                color: isUser ? userTextColor : null,
               ),
               a: TextStyle(
-                color: isUser
-                    ? hermesUserMessageForeground
-                    : theme.colorScheme.primary,
+                color: isUser ? userTextColor : theme.colorScheme.primary,
               ),
               h1: isUser
                   ? theme.textTheme.headlineSmall?.copyWith(
-                      color: hermesUserMessageForeground,
+                      color: userTextColor,
                     )
                   : theme.textTheme.headlineSmall,
               h2: isUser
-                  ? theme.textTheme.titleLarge?.copyWith(
-                      color: hermesUserMessageForeground,
-                    )
+                  ? theme.textTheme.titleLarge?.copyWith(color: userTextColor)
                   : theme.textTheme.titleLarge,
               h3: isUser
-                  ? theme.textTheme.titleMedium?.copyWith(
-                      color: hermesUserMessageForeground,
-                    )
+                  ? theme.textTheme.titleMedium?.copyWith(color: userTextColor)
                   : theme.textTheme.titleMedium,
               blockquote: TextStyle(
-                color: isUser ? hermesUserMessageForeground : Colors.grey,
+                color: isUser ? userTextColor : Colors.grey,
                 fontStyle: FontStyle.italic,
               ),
               blockquoteDecoration: BoxDecoration(
                 border: Border(
                   left: BorderSide(
                     color: isUser
-                        ? hermesUserMessageForeground.withValues(alpha: 0.65)
+                        ? userTextColor.withValues(alpha: 0.65)
                         : theme.colorScheme.primary,
                     width: 3,
                   ),
@@ -3855,7 +3843,7 @@ class MessageBubble extends StatelessWidget {
               em: isUser
                   ? theme.textTheme.bodyMedium?.copyWith(
                       fontStyle: FontStyle.italic,
-                      color: hermesUserMessageForeground,
+                      color: userTextColor,
                     )
                   : theme.textTheme.bodyMedium?.copyWith(
                       fontStyle: FontStyle.italic,
@@ -3863,7 +3851,7 @@ class MessageBubble extends StatelessWidget {
               strong: isUser
                   ? theme.textTheme.bodyMedium?.copyWith(
                       fontWeight: FontWeight.bold,
-                      color: hermesUserMessageForeground,
+                      color: userTextColor,
                     )
                   : theme.textTheme.bodyMedium?.copyWith(
                       fontWeight: FontWeight.bold,
