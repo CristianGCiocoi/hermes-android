@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'core/services/connection_manager.dart';
 import 'core/services/appearance_preference.dart';
@@ -9,6 +8,7 @@ import 'core/services/gateway_turn_application_controller.dart';
 import 'core/services/text_size_preference.dart';
 import 'core/screens/session_list_screen.dart';
 import 'core/utils/responsive.dart';
+import 'core/widgets/hermes_brand_style.dart';
 
 String? desktopGatewayUrlForConnectionSave(
   String value, {
@@ -188,9 +188,8 @@ class HermesHeader extends StatelessWidget {
         children: [
           Text(
             'HERMES',
-            style: GoogleFonts.cinzel(
+            style: hermesBrandStyle(
               fontSize: 28,
-              fontWeight: FontWeight.w700,
               color: const Color(0xFFD4AF37),
               letterSpacing: 6,
             ),
@@ -781,11 +780,7 @@ class _HomeScreenState extends State<HomeScreen> {
       appBar: AppBar(
         title: Text(
           'HERMES',
-          style: GoogleFonts.cinzel(
-            fontWeight: FontWeight.w700,
-            letterSpacing: 6,
-            fontSize: 22,
-          ),
+          style: hermesBrandStyle(letterSpacing: 6, fontSize: 22),
         ),
         centerTitle: true,
       ),

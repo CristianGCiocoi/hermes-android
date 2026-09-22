@@ -4,6 +4,24 @@ All notable changes to this project are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Release notes for
 versions prior to 1.0.7 are in the **What's new** sections of the [README](README.md).
 
+## [1.0.28-hermesapk.28] - 2026-09-22
+
+### Fixed
+
+- Application startup and every Hermes wordmark now use Android's packaged
+  system serif family. First paint no longer imports or invokes `google_fonts`,
+  fetches Cinzel from an external host, or depends on Internet font delivery.
+- A failed or unavailable external font service can no longer leave a normal
+  cold launch on the splash screen.
+
+### Compatibility and validation
+
+- The `.27` generic `hermes.notification.delivery.v1` contract and all existing
+  Gateway behavior remain unchanged.
+- Static and widget regressions enforce a network-free wordmark, dependency
+  removal, and successful local rendering before APK and cold-start
+  qualification.
+
 ## [1.0.27-hermesapk.27] - 2026-09-22
 
 ### Added
