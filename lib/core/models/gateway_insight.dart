@@ -2,6 +2,8 @@ import 'dart:convert';
 
 import 'package:crypto/crypto.dart';
 
+import 'gateway_notification_delivery.dart';
+
 enum GatewayReasoningEventMode { append, replace }
 
 class GatewayReasoningUpdate {
@@ -148,12 +150,14 @@ class GatewayNotification {
   final String text;
   final GatewayNotificationLevel level;
   final Duration? ttl;
+  final GatewayNotificationDeliveryProjection? delivery;
 
   const GatewayNotification({
     required this.key,
     required this.text,
     required this.level,
     this.ttl,
+    this.delivery,
   });
 
   static GatewayNotification? fromEventData(Map<String, dynamic> data) {
@@ -177,6 +181,9 @@ class GatewayNotification {
         _ => GatewayNotificationLevel.info,
       },
       ttl: ttlMs == null ? null : Duration(milliseconds: ttlMs),
+      delivery: GatewayNotificationDeliveryProjection.fromJson(
+        data['delivery'],
+      ),
     );
   }
 }

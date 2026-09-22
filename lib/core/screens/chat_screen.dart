@@ -22,6 +22,7 @@ import '../services/gateway_turn_application_controller.dart';
 import '../services/gateway_turn_coordinator.dart';
 import '../services/gateway_turn_recovery.dart';
 import '../services/gateway_turn_ui_projection.dart';
+import '../services/local_notification_service.dart';
 import '../services/voice_composer_adapter.dart';
 import '../services/ws_client.dart';
 import '../models/attachment_draft.dart';
@@ -177,6 +178,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   late final AttachmentDraftSendCoordinator _attachmentSendCoordinator;
   late final Future<ChatModelOverrideStore> _chatModelStore;
   late final Future<void> _sessionModelRestore;
+  final LocalNotificationService _localNotificationService =
+      LocalNotificationService();
   DesktopGatewayClient? _desktopGateway;
   GatewayTurnApplicationSession? _turnApplicationSession;
   DesktopConnectionState _desktopConnectionState =
@@ -281,7 +284,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         _desktopGateway = DesktopGatewayClient.fromConnection(
           widget.connection,
         );
-        _desktopGateway!.setAsyncEventListener(_handleDesktopAsyncEvent);
+        _desktopGateway!.setAsyncEventListener((sessionId, event) {
+          unawaited(_handleDesktopAsyncEvent(sessionId, event));
+        });
         _desktopGateway!.setConnectionListener((state) {
           if (!mounted) return;
           setState(() {
@@ -403,6 +408,12 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       final interaction = await gateway.getInteractionModeState(
         sessionId: widget.session.id,
       );
+      if (await gateway.supportsNotificationDelivery(
+        sessionId: widget.session.id,
+      )) {
+        await _localNotificationService.requestPermission();
+        await gateway.pullPendingNotification(sessionId: widget.session.id);
+      }
       if (mounted) {
         setState(() {
           if (effective != null) _effectiveFullControl = effective;
@@ -2410,13 +2421,33 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     return null;
   }
 
-  void _handleDesktopAsyncEvent(String mobileSessionId, StreamEvent event) {
+  Future<void> _handleDesktopAsyncEvent(
+    String mobileSessionId,
+    StreamEvent event,
+  ) async {
     if (!mounted || mobileSessionId != widget.session.id) return;
     if (event.type == 'notification.show') {
       final notification = GatewayNotification.fromEventData(event.data);
       if (notification == null) return;
       _activityCenter.showNotification(notification);
       _scheduleStreamingFollow();
+      final delivery = notification.delivery;
+      final gateway = _desktopGateway;
+      if (delivery != null && gateway != null) {
+        try {
+          final result = await _localNotificationService.show(notification);
+          await gateway.recordNotificationDeliveryResult(
+            sessionId: widget.session.id,
+            notificationId: delivery.notificationId,
+            expectedVersion: delivery.version,
+            resultRef: result.resultRef,
+            outcome: result.outcome,
+          );
+        } catch (_) {
+          // An unknown platform or transport outcome is never reported as a
+          // successful delivery. The Gateway keeps the item reconcilable.
+        }
+      }
       return;
     }
     if (event.type == 'notification.clear') {
