@@ -4,6 +4,38 @@ All notable changes to this project are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Release notes for
 versions prior to 1.0.7 are in the **What's new** sections of the [README](README.md).
 
+## [1.0.27-hermesapk.27] - 2026-09-22
+
+### Added
+
+- Configurable Desktop Gateway connections can now negotiate the optional,
+  Hermes-owned `hermes.notification.delivery.v1` capability.
+- A capable Gateway may expose one pending item through `notification.pull`;
+  Android presents its bounded `notification.show` projection through the
+  normal OS notification channel and returns the native factual outcome through
+  `notification.delivery_result`.
+- Android 13+ requests `POST_NOTIFICATIONS` through the standard runtime flow.
+  Permission denial is preserved as a factual result instead of being reported
+  as a successful delivery.
+
+### Compatibility and safety
+
+- Older and generic Gateways receive zero notification RPCs. Existing chat,
+  session create/resume, Projects, attachments, and interaction modes remain
+  unchanged.
+- The notification bridge receives only presentation metadata. API keys,
+  Dashboard credentials, connection routes, and server authority are never
+  passed to Android's platform notification channel.
+- The product build contains no CS-141 compile-time gate, hard-coded private
+  route, internal CA, canary provisioning, SecretRef relay, or ATLAS
+  Notification authority.
+
+### Validation
+
+- Focused contract, native-bridge, capability, pull-once, callback, generic
+  compatibility, connection persistence, and release identity tests are part
+  of the release qualification suite.
+
 ## [1.0.26-hermesapk.26] - 2026-08-18
 
 ### Fixed

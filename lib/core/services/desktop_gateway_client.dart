@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:crypto/crypto.dart';
 
 import '../models/gateway_interaction_mode.dart';
+import '../models/gateway_notification_delivery.dart';
 import 'connection_manager.dart';
 import 'gateway_turn_coordinator.dart';
 import 'gateway_turn_journal.dart';
@@ -41,6 +42,8 @@ class DesktopGatewayClient {
   final Map<String, bool> _effectiveFullControl = {};
   final Map<String, GatewayInteractionModeState> _interactionModeStates = {};
   GatewayInteractionModeCapability? _interactionModeCapability;
+  GatewayNotificationDeliveryCapability? _notificationDeliveryCapability;
+  final Map<String, Future<bool>> _notificationPulls = {};
   DesktopAsyncEventCallback? _asyncEventListener;
   DesktopConnectionCallback? _connectionListener;
   DesktopSessionPermissionCallback? _sessionPermissionListener;
@@ -143,6 +146,8 @@ class DesktopGatewayClient {
     _effectiveFullControl.clear();
     _interactionModeStates.clear();
     _interactionModeCapability = null;
+    _notificationDeliveryCapability = null;
+    _notificationPulls.clear();
     final ticket = await _dashboard.mintWebSocketTicket();
     final client = WsClient(_baseUrl, ticket: ticket);
     _installAsyncEventBridge(client);
@@ -154,6 +159,8 @@ class DesktopGatewayClient {
         _effectiveFullControl.clear();
         _interactionModeStates.clear();
         _interactionModeCapability = null;
+        _notificationDeliveryCapability = null;
+        _notificationPulls.clear();
         _connectionListener?.call(DesktopConnectionState.disconnected);
       }
     };
@@ -321,6 +328,59 @@ class DesktopGatewayClient {
     );
     _interactionModeCapability = capability;
     return capability;
+  }
+
+  Future<GatewayNotificationDeliveryCapability> _notificationCapabilityFor(
+    WsClient client,
+  ) async {
+    final cached = _notificationDeliveryCapability;
+    if (cached != null) return cached;
+    final capability = GatewayNotificationDeliveryCapability.fromGatewayReady(
+      await client.waitForGatewayReady(),
+    );
+    _notificationDeliveryCapability = capability;
+    return capability;
+  }
+
+  Future<bool> supportsNotificationDelivery({required String sessionId}) async {
+    final gateway = await _connect(sessionId);
+    return (await _notificationCapabilityFor(gateway.client)).supported;
+  }
+
+  /// Pulls at most once for a mapped session on the current authenticated
+  /// socket. Unsupported and malformed capabilities cause zero notification
+  /// RPCs, preserving compatibility with generic and older Gateways.
+  Future<bool> pullPendingNotification({required String sessionId}) {
+    return _notificationPulls.putIfAbsent(sessionId, () async {
+      final gateway = await _connect(sessionId);
+      final capability = await _notificationCapabilityFor(gateway.client);
+      if (!capability.supported) return false;
+      await gateway.client.pullNotification(gateway.sessionId);
+      return true;
+    });
+  }
+
+  Future<GatewayNotificationDeliveryReceipt> recordNotificationDeliveryResult({
+    required String sessionId,
+    required String notificationId,
+    required int expectedVersion,
+    required String resultRef,
+    required GatewayNotificationDeliveryOutcome outcome,
+  }) async {
+    final gateway = await _connect(sessionId);
+    final capability = await _notificationCapabilityFor(gateway.client);
+    if (!capability.supported) {
+      throw StateError(
+        'Notification delivery is not supported by this Gateway',
+      );
+    }
+    return gateway.client.recordNotificationDeliveryResult(
+      sessionId: gateway.sessionId,
+      notificationId: notificationId,
+      expectedVersion: expectedVersion,
+      resultRef: resultRef,
+      outcome: outcome,
+    );
   }
 
   Future<RemoteFileAttachment> attachFile({
@@ -640,6 +700,8 @@ class DesktopGatewayClient {
     _effectiveFullControl.clear();
     _interactionModeStates.clear();
     _interactionModeCapability = null;
+    _notificationDeliveryCapability = null;
+    _notificationPulls.clear();
     final turnCoordinatorRegistry = _turnCoordinatorRegistry;
     _turnCoordinatorRegistry = null;
     if (turnCoordinatorRegistry != null) {

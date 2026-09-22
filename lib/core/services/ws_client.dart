@@ -10,6 +10,7 @@ import 'package:crypto/crypto.dart';
 import 'package:web_socket_channel/io.dart';
 
 import '../models/gateway_interaction_mode.dart';
+import '../models/gateway_notification_delivery.dart';
 
 Object? _deepFreezeJson(Object? value) {
   if (value is Map) {
@@ -1010,6 +1011,56 @@ class WsClient {
         fallbackMessage: 'Gateway clarification failed',
       );
     }
+  }
+
+  Future<Map<String, dynamic>> pullNotification(String sessionId) async {
+    final response = await send('notification.pull', {'session_id': sessionId});
+    final error = response['error'];
+    if (error != null) {
+      throw _gatewayResponseError(
+        'notification.pull',
+        error,
+        fallbackMessage: 'Notification pull failed',
+      );
+    }
+    final result = response['result'];
+    if (result is Map<String, dynamic>) return result;
+    throw JsonRpcError('notification.pull', 'Gateway returned no pull result');
+  }
+
+  Future<GatewayNotificationDeliveryReceipt> recordNotificationDeliveryResult({
+    required String sessionId,
+    required String notificationId,
+    required int expectedVersion,
+    required String resultRef,
+    required GatewayNotificationDeliveryOutcome outcome,
+  }) async {
+    final response = await send('notification.delivery_result', {
+      'session_id': sessionId,
+      'notification_id': notificationId,
+      'expected_version': expectedVersion,
+      'result_ref': resultRef,
+      'outcome': outcome.wireValue,
+    });
+    final error = response['error'];
+    if (error != null) {
+      throw _gatewayResponseError(
+        'notification.delivery_result',
+        error,
+        fallbackMessage: 'Notification delivery result failed',
+      );
+    }
+    final receipt = GatewayNotificationDeliveryReceipt.fromResult(
+      response['result'],
+      expectedNotificationId: notificationId,
+      minimumVersion: expectedVersion,
+      expectedOutcome: outcome,
+    );
+    if (receipt != null) return receipt;
+    throw JsonRpcError(
+      'notification.delivery_result',
+      'Gateway returned an invalid delivery result receipt',
+    );
   }
 
   Future<void> _respondToSensitivePrompt({
