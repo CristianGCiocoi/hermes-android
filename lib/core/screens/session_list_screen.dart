@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../accessibility/hermes_semantics_ids.dart';
 import '../widgets/hermes_brand_style.dart';
 import '../services/connection_manager.dart';
 import '../services/desktop_gateway_client.dart';
@@ -529,10 +530,15 @@ class _SessionListScreenState extends State<SessionListScreen> {
         ],
       ),
       drawer: _buildDrawer(),
-      floatingActionButton: FloatingActionButton(
-        tooltip: 'New Chat',
-        onPressed: _createNewSession,
-        child: const Icon(Icons.chat, color: Colors.black),
+      floatingActionButton: Semantics(
+        identifier: HermesSemanticsId.newChat,
+        button: true,
+        label: 'New Chat',
+        child: FloatingActionButton(
+          tooltip: 'New Chat',
+          onPressed: _createNewSession,
+          child: const Icon(Icons.chat, color: Colors.black),
+        ),
       ),
       body: _buildBody(),
     );

@@ -4,6 +4,28 @@ All notable changes to this project are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Release notes for
 versions prior to 1.0.7 are in the **What's new** sections of the [README](README.md).
 
+## [1.0.29-hermesapk.29] - 2026-09-23
+
+### Added
+
+- Stable, unique Android accessibility identifiers now cover Add Connection,
+  the add/edit dialog, every connection field and switch, Cancel, Connect,
+  each saved connection, New Chat, and the empty chat composer.
+- Saved-connection identifiers use only the opaque connection ID. Connection
+  labels, hosts, usernames, API keys, and passwords never become part of an
+  automation identifier.
+
+### Safety and validation
+
+- API key and Dashboard password fields explicitly remain obscured in the
+  accessibility tree. Existing secure-storage tests continue to prove that
+  credentials do not enter the non-secret connection metadata store.
+- Widget qualification covers a clean cold start, the complete expanded form,
+  unique identifiers, secret-field masking, saved connections, New Chat, and
+  the empty composer. The consumed ATLAS product-E2E attempt was not retried.
+- Generic Hermes Gateway behavior and all `.28` offline-start guarantees remain
+  unchanged.
+
 ## [1.0.28-hermesapk.28] - 2026-09-22
 
 ### Fixed

@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:hermes_android/core/accessibility/hermes_semantics_ids.dart';
 import 'package:hermes_android/core/screens/chat_screen.dart';
 import 'package:hermes_android/core/services/connection_manager.dart';
 import 'package:hermes_android/core/widgets/voice_composer_controls.dart';
@@ -29,6 +30,11 @@ void main() {
               submitCount += 1;
               submittedText = text;
             },
+      );
+
+      expect(
+        find.bySemanticsIdentifier(HermesSemanticsId.composer),
+        findsOneWidget,
       );
 
       await tester.enterText(find.byType(TextField), 'Before after');

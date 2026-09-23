@@ -4,6 +4,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import '../accessibility/hermes_semantics_ids.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:flutter_tts/flutter_tts.dart';
@@ -3437,6 +3438,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                 ),
                 Expanded(
                   child: Semantics(
+                    identifier: HermesSemanticsId.composer,
                     label: 'Message',
                     textField: true,
                     child: TextField(
