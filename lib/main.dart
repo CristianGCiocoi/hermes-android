@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'core/accessibility/hermes_semantics_ids.dart';
 import 'core/services/connection_manager.dart';
 import 'core/services/appearance_preference.dart';
 import 'core/services/gateway_turn_application_controller.dart';
@@ -722,54 +723,64 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildConnectionCard(SavedConnection conn) {
-    return Card(
-      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-      child: ListTile(
-        leading: const Icon(Icons.router, color: Color(0xFFD4AF37)),
-        title: Text(conn.label),
-        subtitle: Text(
-          '${conn.host}:${conn.port}${conn.gatewayPrefix != null && conn.gatewayPrefix!.isNotEmpty ? conn.gatewayPrefix! : ''}'
-          '  \u2022  Key: ${conn.apiKey.isNotEmpty ? "\u2713" : "\u2717"}',
-          style: TextStyle(color: Colors.grey[600]),
-        ),
-        trailing: PopupMenuButton<String>(
-          onSelected: (v) async {
-            if (v == 'delete') {
-              try {
-                await widget.connManager.deleteConnection(conn.id);
-                if (mounted) _refresh();
-              } on CredentialStorageException {
-                if (!mounted) return;
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text(
-                      'The connection could not be deleted safely.',
+    return Semantics(
+      identifier: HermesSemanticsId.savedConnection(conn.id),
+      container: true,
+      child: Card(
+        margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+        child: ListTile(
+          leading: const Icon(Icons.router, color: Color(0xFFD4AF37)),
+          title: Text(conn.label),
+          subtitle: Text(
+            '${conn.host}:${conn.port}${conn.gatewayPrefix != null && conn.gatewayPrefix!.isNotEmpty ? conn.gatewayPrefix! : ''}'
+            '  \u2022  Key: ${conn.apiKey.isNotEmpty ? "\u2713" : "\u2717"}',
+            style: TextStyle(color: Colors.grey[600]),
+          ),
+          trailing: PopupMenuButton<String>(
+            onSelected: (v) async {
+              if (v == 'delete') {
+                try {
+                  await widget.connManager.deleteConnection(conn.id);
+                  if (mounted) _refresh();
+                } on CredentialStorageException {
+                  if (!mounted) return;
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text(
+                        'The connection could not be deleted safely.',
+                      ),
                     ),
-                  ),
-                );
+                  );
+                }
+              } else if (v == 'edit') {
+                _showEditConnectionDialog(conn);
+              } else if (v == 'apikey') {
+                _showApiKeyDialog(conn);
+              } else if (v == 'dashboard') {
+                _showDashboardAuthDialog(conn);
               }
-            } else if (v == 'edit') {
-              _showEditConnectionDialog(conn);
-            } else if (v == 'apikey') {
-              _showApiKeyDialog(conn);
-            } else if (v == 'dashboard') {
-              _showDashboardAuthDialog(conn);
-            }
-          },
-          itemBuilder: (_) => [
-            const PopupMenuItem(value: 'edit', child: Text('Edit Connection')),
-            const PopupMenuItem(value: 'apikey', child: Text('Update API Key')),
-            const PopupMenuItem(
-              value: 'dashboard',
-              child: Text('Dashboard / Proxy Settings'),
-            ),
-            const PopupMenuItem(
-              value: 'delete',
-              child: Text('Delete', style: TextStyle(color: Colors.red)),
-            ),
-          ],
+            },
+            itemBuilder: (_) => [
+              const PopupMenuItem(
+                value: 'edit',
+                child: Text('Edit Connection'),
+              ),
+              const PopupMenuItem(
+                value: 'apikey',
+                child: Text('Update API Key'),
+              ),
+              const PopupMenuItem(
+                value: 'dashboard',
+                child: Text('Dashboard / Proxy Settings'),
+              ),
+              const PopupMenuItem(
+                value: 'delete',
+                child: Text('Delete', style: TextStyle(color: Colors.red)),
+              ),
+            ],
+          ),
+          onTap: () => _navigateToSessions(conn),
         ),
-        onTap: () => _navigateToSessions(conn),
       ),
     );
   }
@@ -828,10 +839,15 @@ class _HomeScreenState extends State<HomeScreen> {
                 );
               },
             ),
-      floatingActionButton: FloatingActionButton(
-        tooltip: 'Add Connection',
-        onPressed: _showAddDialog,
-        child: const Icon(Icons.add, color: Colors.black),
+      floatingActionButton: Semantics(
+        identifier: HermesSemanticsId.addConnection,
+        button: true,
+        label: 'Add Connection',
+        child: FloatingActionButton(
+          tooltip: 'Add Connection',
+          onPressed: _showAddDialog,
+          child: const Icon(Icons.add, color: Colors.black),
+        ),
       ),
     );
   }
@@ -1056,206 +1072,288 @@ class _AddDialogState extends State<_AddDialog> {
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      title: Text(
-        _isEditing ? 'Edit Gateway Connection' : 'Add Gateway Connection',
-      ),
-      content: SingleChildScrollView(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (_error != null) ...[
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(10),
-                margin: const EdgeInsets.only(bottom: 12),
-                decoration: BoxDecoration(
-                  color: Colors.red.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: Colors.red.withValues(alpha: 0.3)),
-                ),
-                child: Row(
-                  children: [
-                    const Icon(
-                      Icons.error_outline,
-                      color: Colors.red,
-                      size: 18,
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        _error!,
-                        style: const TextStyle(color: Colors.red, fontSize: 13),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-            TextField(
-              controller: _label,
-              decoration: const InputDecoration(labelText: 'Label'),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _host,
-              decoration: const InputDecoration(
-                labelText: 'Host',
-                hintText:
-                    '192.168.1.50, 100.x.y.z, or hermes-machine.tailnet.ts.net',
-              ),
-              keyboardType: TextInputType.text,
-              autocorrect: false,
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _port,
-              decoration: const InputDecoration(
-                labelText: 'Port',
-                hintText: '8642 (API Server)',
-              ),
-              keyboardType: TextInputType.number,
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _apiKey,
-              decoration: const InputDecoration(
-                labelText: 'API Key',
-                hintText: 'API_SERVER_KEY from ~/.hermes/.env',
-              ),
-              obscureText: true,
-            ),
-            const SizedBox(height: 4),
-            InkWell(
-              onTap: _validating
-                  ? null
-                  : () => setState(() => _showDashboard = !_showDashboard),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 8),
-                child: Row(
-                  children: [
-                    Icon(
-                      _showDashboard ? Icons.expand_less : Icons.expand_more,
-                      size: 20,
-                      color: Colors.grey[500],
-                    ),
-                    const SizedBox(width: 4),
-                    Text(
-                      'Custom proxy and dashboard details',
-                      style: TextStyle(color: Colors.grey[500], fontSize: 13),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            if (_showDashboard) ...[
-              const SizedBox(height: 8),
-              TextField(
-                controller: _gatewayPrefix,
-                decoration: const InputDecoration(
-                  labelText: 'Gateway path prefix',
-                  hintText: 'e.g. /personal (blank uses default Organizator)',
-                ),
-                autocorrect: false,
-              ),
-              SwitchListTile(
-                value: _atlasOwnerEnabled,
-                contentPadding: EdgeInsets.zero,
-                title: const Text('ATLAS owner enrichment'),
-                subtitle: const Text(
-                  'Optional. Generic Hermes remains the default; the server '
-                  'still authenticates and owns Profile and Project state.',
-                ),
-                onChanged: _validating
-                    ? null
-                    : (value) => setState(() => _atlasOwnerEnabled = value),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _dashboardPrefix,
-                decoration: const InputDecoration(
-                  labelText: 'Dashboard path prefix',
-                  hintText: 'e.g. /dashboard (proxy path before /api/)',
-                ),
-                autocorrect: false,
-              ),
-              const SizedBox(height: 8),
-              SwitchListTile(
-                value: _dashboardProxied,
-                contentPadding: EdgeInsets.zero,
-                title: const Text('Dashboard behind proxy'),
-                subtitle: const Text(
-                  'Nginx injects auth — app sends clean requests',
-                ),
-                onChanged: (v) => setState(() => _dashboardProxied = v),
-              ),
-              Padding(
-                padding: const EdgeInsets.only(bottom: 4),
-                child: Text(
-                  'Optional. For the Memory/Cron/Skills/Settings tabs. Leave '
-                  'blank to use the default dashboard port (9119) with no login.',
-                  style: TextStyle(color: Colors.grey[600], fontSize: 12),
-                ),
-              ),
-              TextField(
-                controller: _dashPort,
-                decoration: const InputDecoration(
-                  labelText: 'Dashboard Port',
-                  hintText: 'Leave blank for default (9119)',
-                ),
-                keyboardType: TextInputType.number,
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _dashUser,
-                decoration: const InputDecoration(
-                  labelText: 'Dashboard Username (optional)',
-                ),
-                autocorrect: false,
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _dashPass,
-                decoration: const InputDecoration(
-                  labelText: 'Dashboard Password (optional)',
-                ),
-                obscureText: true,
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _desktopGatewayUrl,
-                decoration: const InputDecoration(
-                  labelText: 'Desktop Gateway URL (optional)',
-                  hintText: 'https://hermes-desktop.example.lan',
-                  helperText:
-                      'Enables file attachments through the Desktop remote gateway.',
-                ),
-                keyboardType: TextInputType.url,
-                autocorrect: false,
-              ),
-            ],
-          ],
+    return Semantics(
+      identifier: _isEditing
+          ? HermesSemanticsId.editConnectionDialog
+          : HermesSemanticsId.addConnectionDialog,
+      container: true,
+      explicitChildNodes: true,
+      scopesRoute: true,
+      namesRoute: true,
+      label: _isEditing
+          ? 'Edit Gateway Connection dialog'
+          : 'Add Gateway Connection dialog',
+      child: AlertDialog(
+        title: Text(
+          _isEditing ? 'Edit Gateway Connection' : 'Add Gateway Connection',
         ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: _validating ? null : () => Navigator.pop(context),
-          child: const Text('Cancel'),
-        ),
-        FilledButton(
-          onPressed: _validating ? null : _validateAndSave,
-          child: _validating
-              ? const SizedBox(
-                  width: 18,
-                  height: 18,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    color: Colors.white,
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (_error != null) ...[
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(10),
+                  margin: const EdgeInsets.only(bottom: 12),
+                  decoration: BoxDecoration(
+                    color: Colors.red.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                      color: Colors.red.withValues(alpha: 0.3),
+                    ),
                   ),
-                )
-              : Text(_isEditing ? 'Save Changes' : 'Connect'),
+                  child: Row(
+                    children: [
+                      const Icon(
+                        Icons.error_outline,
+                        color: Colors.red,
+                        size: 18,
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          _error!,
+                          style: const TextStyle(
+                            color: Colors.red,
+                            fontSize: 13,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+              Semantics(
+                identifier: HermesSemanticsId.connectionLabel,
+                textField: true,
+                child: TextField(
+                  controller: _label,
+                  decoration: const InputDecoration(labelText: 'Label'),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Semantics(
+                identifier: HermesSemanticsId.connectionHost,
+                textField: true,
+                child: TextField(
+                  controller: _host,
+                  decoration: const InputDecoration(
+                    labelText: 'Host',
+                    hintText:
+                        '192.168.1.50, 100.x.y.z, or hermes-machine.tailnet.ts.net',
+                  ),
+                  keyboardType: TextInputType.text,
+                  autocorrect: false,
+                ),
+              ),
+              const SizedBox(height: 12),
+              Semantics(
+                identifier: HermesSemanticsId.connectionPort,
+                textField: true,
+                child: TextField(
+                  controller: _port,
+                  decoration: const InputDecoration(
+                    labelText: 'Port',
+                    hintText: '8642 (API Server)',
+                  ),
+                  keyboardType: TextInputType.number,
+                ),
+              ),
+              const SizedBox(height: 12),
+              Semantics(
+                identifier: HermesSemanticsId.connectionApiKey,
+                textField: true,
+                obscured: true,
+                child: TextField(
+                  controller: _apiKey,
+                  decoration: const InputDecoration(
+                    labelText: 'API Key',
+                    hintText: 'API_SERVER_KEY from ~/.hermes/.env',
+                  ),
+                  obscureText: true,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Semantics(
+                identifier: HermesSemanticsId.connectionAdvanced,
+                button: true,
+                toggled: _showDashboard,
+                child: InkWell(
+                  onTap: _validating
+                      ? null
+                      : () => setState(() => _showDashboard = !_showDashboard),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    child: Row(
+                      children: [
+                        Icon(
+                          _showDashboard
+                              ? Icons.expand_less
+                              : Icons.expand_more,
+                          size: 20,
+                          color: Colors.grey[500],
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          'Custom proxy and dashboard details',
+                          style: TextStyle(
+                            color: Colors.grey[500],
+                            fontSize: 13,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              if (_showDashboard) ...[
+                const SizedBox(height: 8),
+                Semantics(
+                  identifier: HermesSemanticsId.connectionGatewayPrefix,
+                  textField: true,
+                  child: TextField(
+                    controller: _gatewayPrefix,
+                    decoration: const InputDecoration(
+                      labelText: 'Gateway path prefix',
+                      hintText:
+                          'e.g. /personal (blank uses default Organizator)',
+                    ),
+                    autocorrect: false,
+                  ),
+                ),
+                Semantics(
+                  identifier: HermesSemanticsId.connectionAtlasOwner,
+                  child: SwitchListTile(
+                    value: _atlasOwnerEnabled,
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('ATLAS owner enrichment'),
+                    subtitle: const Text(
+                      'Optional. Generic Hermes remains the default; the server '
+                      'still authenticates and owns Profile and Project state.',
+                    ),
+                    onChanged: _validating
+                        ? null
+                        : (value) => setState(() => _atlasOwnerEnabled = value),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Semantics(
+                  identifier: HermesSemanticsId.connectionDashboardPrefix,
+                  textField: true,
+                  child: TextField(
+                    controller: _dashboardPrefix,
+                    decoration: const InputDecoration(
+                      labelText: 'Dashboard path prefix',
+                      hintText: 'e.g. /dashboard (proxy path before /api/)',
+                    ),
+                    autocorrect: false,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Semantics(
+                  identifier: HermesSemanticsId.connectionDashboardProxied,
+                  child: SwitchListTile(
+                    value: _dashboardProxied,
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Dashboard behind proxy'),
+                    subtitle: const Text(
+                      'Nginx injects auth — app sends clean requests',
+                    ),
+                    onChanged: (v) => setState(() => _dashboardProxied = v),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 4),
+                  child: Text(
+                    'Optional. For the Memory/Cron/Skills/Settings tabs. Leave '
+                    'blank to use the default dashboard port (9119) with no login.',
+                    style: TextStyle(color: Colors.grey[600], fontSize: 12),
+                  ),
+                ),
+                Semantics(
+                  identifier: HermesSemanticsId.connectionDashboardPort,
+                  textField: true,
+                  child: TextField(
+                    controller: _dashPort,
+                    decoration: const InputDecoration(
+                      labelText: 'Dashboard Port',
+                      hintText: 'Leave blank for default (9119)',
+                    ),
+                    keyboardType: TextInputType.number,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Semantics(
+                  identifier: HermesSemanticsId.connectionDashboardUsername,
+                  textField: true,
+                  child: TextField(
+                    controller: _dashUser,
+                    decoration: const InputDecoration(
+                      labelText: 'Dashboard Username (optional)',
+                    ),
+                    autocorrect: false,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Semantics(
+                  identifier: HermesSemanticsId.connectionDashboardPassword,
+                  textField: true,
+                  obscured: true,
+                  child: TextField(
+                    controller: _dashPass,
+                    decoration: const InputDecoration(
+                      labelText: 'Dashboard Password (optional)',
+                    ),
+                    obscureText: true,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Semantics(
+                  identifier: HermesSemanticsId.connectionDesktopGatewayUrl,
+                  textField: true,
+                  child: TextField(
+                    controller: _desktopGatewayUrl,
+                    decoration: const InputDecoration(
+                      labelText: 'Desktop Gateway URL (optional)',
+                      hintText: 'https://hermes-desktop.example.lan',
+                      helperText:
+                          'Enables file attachments through the Desktop remote gateway.',
+                    ),
+                    keyboardType: TextInputType.url,
+                    autocorrect: false,
+                  ),
+                ),
+              ],
+            ],
+          ),
         ),
-      ],
+        actions: [
+          Semantics(
+            identifier: HermesSemanticsId.connectionCancel,
+            child: TextButton(
+              onPressed: _validating ? null : () => Navigator.pop(context),
+              child: const Text('Cancel'),
+            ),
+          ),
+          Semantics(
+            identifier: HermesSemanticsId.connectionConnect,
+            child: FilledButton(
+              onPressed: _validating ? null : _validateAndSave,
+              child: _validating
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
+                    )
+                  : Text(_isEditing ? 'Save Changes' : 'Connect'),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
