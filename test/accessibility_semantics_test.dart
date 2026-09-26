@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/semantics.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hermes_android/core/accessibility/hermes_semantics_ids.dart';
 import 'package:hermes_android/core/screens/session_list_screen.dart';
@@ -17,6 +18,30 @@ void main() {
   setUp(() {
     SharedPreferences.setMockInitialValues(<String, Object>{});
   });
+
+  testWidgets(
+    'app publishes native semantics before an automation client attaches',
+    (tester) async {
+      final before = SemanticsBinding.instance.debugOutstandingSemanticsHandles;
+      final prefs = await SharedPreferences.getInstance();
+
+      await tester.pumpWidget(HermesApp(connManager: ConnectionManager(prefs)));
+      await tester.pump();
+
+      expect(SemanticsBinding.instance.semanticsEnabled, isTrue);
+      expect(
+        SemanticsBinding.instance.debugOutstandingSemanticsHandles,
+        before + 1,
+      );
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump();
+      expect(
+        SemanticsBinding.instance.debugOutstandingSemanticsHandles,
+        before,
+      );
+    },
+  );
 
   testWidgets(
     'cold start and complete connection form expose stable value-free semantics',

@@ -23,7 +23,7 @@ official Hermes Agent or Nous Research release.
 
 ## Current release
 
-- Version: **1.0.29-hermesapk.29**
+- Version: **1.0.30-hermesapk.30**
 - Test package: `com.hermesagent.hermes_android.dev`
 - Recommended APK for modern phones: ARM64 debug test build from this
   repository's Releases page.
@@ -43,6 +43,29 @@ official Hermes Agent or Nous Research release.
   sequential upload, accessible reordering, remove, and individual retry.
   Sanitized JPEG inputs remain JPEG; PNG and WebP inputs are emitted as PNG.
 - Legacy REST remains fail-closed to one image and does not expose multi-select.
+
+## Native Android accessibility selector contract
+
+Hermes keeps its Flutter semantics tree published while the application is
+running. On Android, each stable `Semantics.identifier` is exposed through
+`AccessibilityNodeInfo.setViewIdResourceName` and appears to UIAutomator as the
+`resource-id` attribute. The canonical representation is the exact value-free
+identifier, for example:
+
+```text
+resource-id="hermes.connection.add"
+resource-id="hermes.connection.field.host"
+resource-id="hermes.connection.action.connect"
+resource-id="hermes.chat.new"
+resource-id="hermes.chat.composer"
+resource-id="hermes.connection.saved.<opaqueId>"
+```
+
+Some Android clients may display the same value with the application prefix,
+`com.hermesagent.hermes_android.dev:id/`. Selectors may accept that normalized
+form but must not derive an identifier from visible text. The `<opaqueId>` is
+the locally generated connection ID; labels, hosts, usernames, API keys,
+passwords, prompts, and message text are never identifier components.
 - Per-chat model and thinking effort without changing the profile default.
 - Search, Rename, Branch, and Delete for remote conversations.
 - Native approval, sudo/secret, clarification, reasoning, tool activity,
@@ -142,7 +165,7 @@ Download the community test APK from this repository's
 For most Android phones, install the arm64 APK:
 
 ```bash
-adb install -r Hermes-Agent-Dev-1.0.29-hermesapk.29-arm64-debug.apk
+adb install -r Hermes-Agent-Dev-1.0.30-hermesapk.30-arm64-debug.apk
 ```
 
 If sideloading directly on Android, enable **Install unknown apps** for your browser or file manager, then open the downloaded APK.

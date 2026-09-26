@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/semantics.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'core/accessibility/hermes_semantics_ids.dart';
 import 'core/services/connection_manager.dart';
@@ -71,10 +72,16 @@ class HermesApp extends StatefulWidget {
 
 class HermesAppState extends State<HermesApp> {
   late final GatewayTurnApplicationController _turnApplicationController;
+  late final SemanticsHandle _nativeAutomationSemanticsHandle;
 
   @override
   void initState() {
     super.initState();
+    // Keep the Flutter semantics tree published before an Android automation
+    // client issues its first selector. Some UiAutomator clients query nodes
+    // directly without first enabling platform accessibility semantics.
+    _nativeAutomationSemanticsHandle = SemanticsBinding.instance
+        .ensureSemantics();
     _turnApplicationController = GatewayTurnApplicationController();
   }
 
@@ -162,6 +169,7 @@ class HermesAppState extends State<HermesApp> {
 
   @override
   void dispose() {
+    _nativeAutomationSemanticsHandle.dispose();
     unawaited(_turnApplicationController.close());
     super.dispose();
   }
