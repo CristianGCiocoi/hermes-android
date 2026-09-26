@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/semantics.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hermes_android/core/accessibility/hermes_semantics_ids.dart';
 import 'package:hermes_android/core/screens/session_list_screen.dart';
@@ -19,6 +20,30 @@ void main() {
   });
 
   testWidgets(
+    'app publishes native semantics before an automation client attaches',
+    (tester) async {
+      final before = SemanticsBinding.instance.debugOutstandingSemanticsHandles;
+      final prefs = await SharedPreferences.getInstance();
+
+      await tester.pumpWidget(HermesApp(connManager: ConnectionManager(prefs)));
+      await tester.pump();
+
+      expect(SemanticsBinding.instance.semanticsEnabled, isTrue);
+      expect(
+        SemanticsBinding.instance.debugOutstandingSemanticsHandles,
+        before + 1,
+      );
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump();
+      expect(
+        SemanticsBinding.instance.debugOutstandingSemanticsHandles,
+        before,
+      );
+    },
+  );
+
+  testWidgets(
     'cold start and complete connection form expose stable value-free semantics',
     (tester) async {
       final semantics = tester.ensureSemantics();
@@ -30,6 +55,15 @@ void main() {
       expect(
         find.bySemanticsIdentifier(HermesSemanticsId.addConnection),
         findsOneWidget,
+      );
+      expect(
+        tester
+            .getSemantics(
+              find.bySemanticsIdentifier(HermesSemanticsId.addConnection),
+            )
+            .getSemanticsData()
+            .hasAction(SemanticsAction.tap),
+        isTrue,
       );
       await tester.tap(
         find.bySemanticsIdentifier(HermesSemanticsId.addConnection),
@@ -50,6 +84,20 @@ void main() {
         HermesSemanticsId.connectionConnect,
       ]) {
         expect(find.bySemanticsIdentifier(identifier), findsOneWidget);
+      }
+      for (final identifier in <String>[
+        HermesSemanticsId.connectionAdvanced,
+        HermesSemanticsId.connectionCancel,
+        HermesSemanticsId.connectionConnect,
+      ]) {
+        expect(
+          tester
+              .getSemantics(find.bySemanticsIdentifier(identifier))
+              .getSemanticsData()
+              .hasAction(SemanticsAction.tap),
+          isTrue,
+          reason: '$identifier must be directly actionable by native clients',
+        );
       }
 
       await tester.enterText(
@@ -142,6 +190,13 @@ void main() {
     expect(find.bySemanticsIdentifier(identifier), findsOneWidget);
     expect(identifier, isNot(contains(visibleLabel)));
     expect(identifier, isNot(contains(visibleHost)));
+    expect(
+      tester
+          .getSemantics(find.bySemanticsIdentifier(identifier))
+          .getSemanticsData()
+          .hasAction(SemanticsAction.tap),
+      isTrue,
+    );
     semantics.dispose();
   });
 
@@ -183,6 +238,13 @@ void main() {
     expect(
       find.bySemanticsIdentifier(HermesSemanticsId.newChat),
       findsOneWidget,
+    );
+    expect(
+      tester
+          .getSemantics(find.bySemanticsIdentifier(HermesSemanticsId.newChat))
+          .getSemanticsData()
+          .hasAction(SemanticsAction.tap),
+      isTrue,
     );
     semantics.dispose();
   });

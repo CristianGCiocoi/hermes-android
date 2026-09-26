@@ -4,6 +4,29 @@ All notable changes to this project are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Release notes for
 versions prior to 1.0.7 are in the **What's new** sections of the [README](README.md).
 
+## [1.0.30-hermesapk.30] - 2026-09-26
+
+### Fixed
+
+- The Flutter semantics tree now remains published for the lifetime of the
+  application. Native Android selectors can therefore resolve the `.29`
+  value-free identifiers immediately, even when an automation client queries
+  `resource-id` without first requesting a hierarchy dump.
+- The identified Add Connection, Advanced, Cancel, Connect, saved connection,
+  and New Chat nodes now expose their tap action directly. Native automation
+  can activate the same controls it resolves, without falling back to visible
+  labels or screen coordinates.
+- The lifetime handle is released with the root application state. Existing
+  platform accessibility activation continues to coexist with it.
+
+### Compatibility and validation
+
+- Identifier strings and their privacy boundary are unchanged from `.29`.
+  Generic Gateway behavior, offline startup, package/signing lineage, and all
+  existing application features remain unchanged.
+- Qualification uses direct UiAutomator2 `resourceId` selectors before any
+  hierarchy dump, matching the client behavior that exposed the `.29` gap.
+
 ## [1.0.29-hermesapk.29] - 2026-09-23
 
 ### Added
