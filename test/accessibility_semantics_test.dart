@@ -56,6 +56,15 @@ void main() {
         find.bySemanticsIdentifier(HermesSemanticsId.addConnection),
         findsOneWidget,
       );
+      expect(
+        tester
+            .getSemantics(
+              find.bySemanticsIdentifier(HermesSemanticsId.addConnection),
+            )
+            .getSemanticsData()
+            .hasAction(SemanticsAction.tap),
+        isTrue,
+      );
       await tester.tap(
         find.bySemanticsIdentifier(HermesSemanticsId.addConnection),
       );
@@ -75,6 +84,20 @@ void main() {
         HermesSemanticsId.connectionConnect,
       ]) {
         expect(find.bySemanticsIdentifier(identifier), findsOneWidget);
+      }
+      for (final identifier in <String>[
+        HermesSemanticsId.connectionAdvanced,
+        HermesSemanticsId.connectionCancel,
+        HermesSemanticsId.connectionConnect,
+      ]) {
+        expect(
+          tester
+              .getSemantics(find.bySemanticsIdentifier(identifier))
+              .getSemanticsData()
+              .hasAction(SemanticsAction.tap),
+          isTrue,
+          reason: '$identifier must be directly actionable by native clients',
+        );
       }
 
       await tester.enterText(
@@ -167,6 +190,13 @@ void main() {
     expect(find.bySemanticsIdentifier(identifier), findsOneWidget);
     expect(identifier, isNot(contains(visibleLabel)));
     expect(identifier, isNot(contains(visibleHost)));
+    expect(
+      tester
+          .getSemantics(find.bySemanticsIdentifier(identifier))
+          .getSemanticsData()
+          .hasAction(SemanticsAction.tap),
+      isTrue,
+    );
     semantics.dispose();
   });
 
@@ -208,6 +238,13 @@ void main() {
     expect(
       find.bySemanticsIdentifier(HermesSemanticsId.newChat),
       findsOneWidget,
+    );
+    expect(
+      tester
+          .getSemantics(find.bySemanticsIdentifier(HermesSemanticsId.newChat))
+          .getSemanticsData()
+          .hasAction(SemanticsAction.tap),
+      isTrue,
     );
     semantics.dispose();
   });

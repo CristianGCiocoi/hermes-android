@@ -12,6 +12,10 @@ versions prior to 1.0.7 are in the **What's new** sections of the [README](READM
   application. Native Android selectors can therefore resolve the `.29`
   value-free identifiers immediately, even when an automation client queries
   `resource-id` without first requesting a hierarchy dump.
+- The identified Add Connection, Advanced, Cancel, Connect, saved connection,
+  and New Chat nodes now expose their tap action directly. Native automation
+  can activate the same controls it resolves, without falling back to visible
+  labels or screen coordinates.
 - The lifetime handle is released with the root application state. Existing
   platform accessibility activation continues to coexist with it.
 

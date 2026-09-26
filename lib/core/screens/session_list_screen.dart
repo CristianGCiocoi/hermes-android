@@ -534,6 +534,7 @@ class _SessionListScreenState extends State<SessionListScreen> {
         identifier: HermesSemanticsId.newChat,
         button: true,
         label: 'New Chat',
+        onTap: _createNewSession,
         child: FloatingActionButton(
           tooltip: 'New Chat',
           onPressed: _createNewSession,

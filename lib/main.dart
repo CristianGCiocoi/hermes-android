@@ -734,6 +734,8 @@ class _HomeScreenState extends State<HomeScreen> {
     return Semantics(
       identifier: HermesSemanticsId.savedConnection(conn.id),
       container: true,
+      button: true,
+      onTap: () => _navigateToSessions(conn),
       child: Card(
         margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
         child: ListTile(
@@ -851,6 +853,7 @@ class _HomeScreenState extends State<HomeScreen> {
         identifier: HermesSemanticsId.addConnection,
         button: true,
         label: 'Add Connection',
+        onTap: _showAddDialog,
         child: FloatingActionButton(
           tooltip: 'Add Connection',
           onPressed: _showAddDialog,
@@ -1187,6 +1190,9 @@ class _AddDialogState extends State<_AddDialog> {
                 identifier: HermesSemanticsId.connectionAdvanced,
                 button: true,
                 toggled: _showDashboard,
+                onTap: _validating
+                    ? null
+                    : () => setState(() => _showDashboard = !_showDashboard),
                 child: InkWell(
                   onTap: _validating
                       ? null
@@ -1339,6 +1345,9 @@ class _AddDialogState extends State<_AddDialog> {
         actions: [
           Semantics(
             identifier: HermesSemanticsId.connectionCancel,
+            button: true,
+            enabled: !_validating,
+            onTap: _validating ? null : () => Navigator.pop(context),
             child: TextButton(
               onPressed: _validating ? null : () => Navigator.pop(context),
               child: const Text('Cancel'),
@@ -1346,6 +1355,9 @@ class _AddDialogState extends State<_AddDialog> {
           ),
           Semantics(
             identifier: HermesSemanticsId.connectionConnect,
+            button: true,
+            enabled: !_validating,
+            onTap: _validating ? null : _validateAndSave,
             child: FilledButton(
               onPressed: _validating ? null : _validateAndSave,
               child: _validating
