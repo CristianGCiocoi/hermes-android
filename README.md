@@ -23,7 +23,7 @@ official Hermes Agent or Nous Research release.
 
 ## Current release
 
-- Version: **1.0.30-hermesapk.30**
+- Version: **1.0.31-hermesapk.31**
 - Test package: `com.hermesagent.hermes_android.dev`
 - Recommended APK for modern phones: ARM64 debug test build from this
   repository's Releases page.
@@ -56,6 +56,11 @@ identifier, for example:
 resource-id="hermes.connection.add"
 resource-id="hermes.connection.field.host"
 resource-id="hermes.connection.action.connect"
+resource-id="hermes.connection.advanced.dialog"
+resource-id="hermes.connection.advanced.tab.dashboard"
+resource-id="hermes.connection.field.dashboard_prefix"
+resource-id="hermes.connection.field.dashboard_port"
+resource-id="hermes.connection.field.desktop_gateway_url"
 resource-id="hermes.chat.new"
 resource-id="hermes.chat.composer"
 resource-id="hermes.connection.saved.<opaqueId>"
@@ -165,7 +170,7 @@ Download the community test APK from this repository's
 For most Android phones, install the arm64 APK:
 
 ```bash
-adb install -r Hermes-Agent-Dev-1.0.30-hermesapk.30-arm64-debug.apk
+adb install -r Hermes-Agent-Dev-1.0.31-hermesapk.31-arm64-debug.apk
 ```
 
 If sideloading directly on Android, enable **Install unknown apps** for your browser or file manager, then open the downloaded APK.

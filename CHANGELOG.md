@@ -4,6 +4,33 @@ All notable changes to this project are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Release notes for
 versions prior to 1.0.7 are in the **What's new** sections of the [README](README.md).
 
+## [1.0.31-hermesapk.31] - 2026-09-27
+
+### Fixed
+
+- Advanced connection settings now open in a dedicated value-free native
+  dialog with Proxy, Dashboard, and Desktop panels. Controls no longer depend
+  on being below the clipped portion of the Add Connection form.
+- Stable Android identifiers cover the Advanced dialog, every panel selector,
+  Done, Dashboard prefix/port/username/password, and Desktop Gateway URL.
+  Dashboard and Desktop controls are visible in the native accessibility tree
+  when their panel is selected.
+
+### Compatibility and safety
+
+- Existing field identifiers and stored connection data remain unchanged.
+  Generic Gateway behavior, optional ATLAS enrichment, dashboard validation,
+  Desktop Gateway routing, secure credential storage, and offline startup are
+  unchanged.
+- API keys and Dashboard passwords remain obscured. No field value, secret,
+  host, route, prompt, or message content is used in a native identifier.
+
+### Validation
+
+- Widget coverage navigates the exact Add Connection → Advanced → Dashboard /
+  Desktop → Done → Connect path and verifies unique actionable identifiers and
+  secret masking before native Android qualification.
+
 ## [1.0.30-hermesapk.30] - 2026-09-26
 
 ### Fixed

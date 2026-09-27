@@ -118,27 +118,55 @@ void main() {
         find.bySemanticsIdentifier(HermesSemanticsId.connectionAdvanced),
       );
       await tester.pumpAndSettle();
+
+      expect(
+        find.bySemanticsIdentifier(HermesSemanticsId.connectionAdvancedDialog),
+        findsOneWidget,
+      );
+      for (final identifier in <String>[
+        HermesSemanticsId.connectionAdvancedProxyTab,
+        HermesSemanticsId.connectionAdvancedDashboardTab,
+        HermesSemanticsId.connectionAdvancedDesktopTab,
+        HermesSemanticsId.connectionAdvancedDone,
+      ]) {
+        final finder = find.bySemanticsIdentifier(identifier);
+        expect(finder, findsOneWidget);
+        expect(
+          tester
+              .getSemantics(finder)
+              .getSemanticsData()
+              .hasAction(SemanticsAction.tap),
+          isTrue,
+          reason: '$identifier must be directly actionable by native clients',
+        );
+      }
       for (final identifier in <String>[
         HermesSemanticsId.connectionGatewayPrefix,
         HermesSemanticsId.connectionAtlasOwner,
+      ]) {
+        expect(find.bySemanticsIdentifier(identifier), findsOneWidget);
+      }
+
+      await tester.tap(
+        find.bySemanticsIdentifier(
+          HermesSemanticsId.connectionAdvancedDashboardTab,
+        ),
+      );
+      await tester.pumpAndSettle();
+      for (final identifier in <String>[
         HermesSemanticsId.connectionDashboardPrefix,
         HermesSemanticsId.connectionDashboardProxied,
         HermesSemanticsId.connectionDashboardPort,
         HermesSemanticsId.connectionDashboardUsername,
         HermesSemanticsId.connectionDashboardPassword,
-        HermesSemanticsId.connectionDesktopGatewayUrl,
       ]) {
-        expect(
-          find.bySemanticsIdentifier(identifier, skipOffstage: false),
-          findsOneWidget,
-        );
+        expect(find.bySemanticsIdentifier(identifier), findsOneWidget);
       }
 
       await tester.enterText(
         find.descendant(
           of: find.bySemanticsIdentifier(
             HermesSemanticsId.connectionDashboardPassword,
-            skipOffstage: false,
           ),
           matching: find.byType(TextField),
         ),
@@ -147,7 +175,6 @@ void main() {
       final passwordNode = tester.getSemantics(
         find.bySemanticsIdentifier(
           HermesSemanticsId.connectionDashboardPassword,
-          skipOffstage: false,
         ),
       );
       expect(passwordNode.flagsCollection.isObscured, isTrue);
@@ -158,6 +185,32 @@ void main() {
       expect(
         passwordNode.identifier,
         HermesSemanticsId.connectionDashboardPassword,
+      );
+
+      await tester.tap(
+        find.bySemanticsIdentifier(
+          HermesSemanticsId.connectionAdvancedDesktopTab,
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        find.bySemanticsIdentifier(
+          HermesSemanticsId.connectionDesktopGatewayUrl,
+        ),
+        findsOneWidget,
+      );
+
+      await tester.tap(
+        find.bySemanticsIdentifier(HermesSemanticsId.connectionAdvancedDone),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        find.bySemanticsIdentifier(HermesSemanticsId.connectionAdvancedDialog),
+        findsNothing,
+      );
+      expect(
+        find.bySemanticsIdentifier(HermesSemanticsId.connectionConnect),
+        findsOneWidget,
       );
       semantics.dispose();
     },

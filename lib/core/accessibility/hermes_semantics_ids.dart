@@ -11,6 +11,15 @@ abstract final class HermesSemanticsId {
   static const connectionPort = 'hermes.connection.field.port';
   static const connectionApiKey = 'hermes.connection.field.api_key';
   static const connectionAdvanced = 'hermes.connection.advanced.toggle';
+  static const connectionAdvancedDialog = 'hermes.connection.advanced.dialog';
+  static const connectionAdvancedProxyTab =
+      'hermes.connection.advanced.tab.proxy';
+  static const connectionAdvancedDashboardTab =
+      'hermes.connection.advanced.tab.dashboard';
+  static const connectionAdvancedDesktopTab =
+      'hermes.connection.advanced.tab.desktop';
+  static const connectionAdvancedDone =
+      'hermes.connection.advanced.action.done';
   static const connectionGatewayPrefix =
       'hermes.connection.field.gateway_prefix';
   static const connectionAtlasOwner =

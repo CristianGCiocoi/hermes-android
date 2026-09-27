@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:hermes_android/core/accessibility/hermes_semantics_ids.dart';
 import 'package:hermes_android/core/services/connection_manager.dart';
 import 'package:hermes_android/main.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -22,7 +23,15 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Add Gateway Connection'), findsOneWidget);
 
-    await tester.tap(find.text('Custom proxy and dashboard details'));
+    await tester.tap(
+      find.bySemanticsIdentifier(HermesSemanticsId.connectionAdvanced),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.bySemanticsIdentifier(
+        HermesSemanticsId.connectionAdvancedDesktopTab,
+      ),
+    );
     await tester.pumpAndSettle();
 
     final desktopGateway = tester.widget<TextField>(
