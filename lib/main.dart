@@ -898,7 +898,6 @@ class _AddDialogState extends State<_AddDialog> {
   late final TextEditingController _dashUser;
   late final TextEditingController _dashPass;
   late final TextEditingController _desktopGatewayUrl;
-  late bool _showDashboard;
   late bool _dashboardProxied;
   late bool _atlasOwnerEnabled;
   bool _validating = false;
@@ -932,14 +931,40 @@ class _AddDialogState extends State<_AddDialog> {
     );
     _dashboardProxied = conn?.dashboardProxied ?? false;
     _atlasOwnerEnabled = conn?.atlasOwnerEnabled ?? false;
-    _showDashboard =
-        conn?.gatewayPrefix?.isNotEmpty == true ||
-        conn?.dashboardPrefix?.isNotEmpty == true ||
-        conn?.dashboardPortOverride != null ||
-        conn?.dashboardUsername?.isNotEmpty == true ||
-        conn?.dashboardPassword?.isNotEmpty == true ||
-        _dashboardProxied ||
-        conn?.desktopGatewayUrl?.isNotEmpty == true;
+  }
+
+  bool get _hasAdvancedDetails =>
+      _gatewayPrefix.text.trim().isNotEmpty ||
+      _dashboardPrefix.text.trim().isNotEmpty ||
+      _dashPort.text.trim().isNotEmpty ||
+      _dashUser.text.trim().isNotEmpty ||
+      _dashPass.text.isNotEmpty ||
+      _dashboardProxied ||
+      _atlasOwnerEnabled ||
+      _desktopGatewayUrl.text.trim().isNotEmpty;
+
+  Future<void> _showAdvancedDetails() async {
+    if (_validating) return;
+    FocusManager.instance.primaryFocus?.unfocus();
+    final result = await showDialog<_AdvancedConnectionSwitches>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => _AdvancedConnectionDetailsDialog(
+        gatewayPrefix: _gatewayPrefix,
+        dashboardPrefix: _dashboardPrefix,
+        dashboardPort: _dashPort,
+        dashboardUsername: _dashUser,
+        dashboardPassword: _dashPass,
+        desktopGatewayUrl: _desktopGatewayUrl,
+        atlasOwnerEnabled: _atlasOwnerEnabled,
+        dashboardProxied: _dashboardProxied,
+      ),
+    );
+    if (!mounted || result == null) return;
+    setState(() {
+      _atlasOwnerEnabled = result.atlasOwnerEnabled;
+      _dashboardProxied = result.dashboardProxied;
+    });
   }
 
   Future<void> _validateAndSave() async {
@@ -1036,7 +1061,6 @@ class _AddDialogState extends State<_AddDialog> {
                 'Gateway connected, but the dashboard could not be reached or '
                 'authenticated. Check the dashboard details, or clear them to skip.';
             _validating = false;
-            _showDashboard = true;
           });
           return;
         }
@@ -1189,156 +1213,40 @@ class _AddDialogState extends State<_AddDialog> {
               Semantics(
                 identifier: HermesSemanticsId.connectionAdvanced,
                 button: true,
-                toggled: _showDashboard,
                 onTap: _validating
                     ? null
-                    : () => setState(() => _showDashboard = !_showDashboard),
+                    : () => unawaited(_showAdvancedDetails()),
                 child: InkWell(
                   onTap: _validating
                       ? null
-                      : () => setState(() => _showDashboard = !_showDashboard),
+                      : () => unawaited(_showAdvancedDetails()),
                   child: Padding(
                     padding: const EdgeInsets.symmetric(vertical: 8),
                     child: Row(
                       children: [
+                        Icon(Icons.tune, size: 20, color: Colors.grey[500]),
+                        const SizedBox(width: 4),
+                        Expanded(
+                          child: Text(
+                            _hasAdvancedDetails
+                                ? 'Custom proxy and dashboard details · configured'
+                                : 'Custom proxy and dashboard details',
+                            style: TextStyle(
+                              color: Colors.grey[500],
+                              fontSize: 13,
+                            ),
+                          ),
+                        ),
                         Icon(
-                          _showDashboard
-                              ? Icons.expand_less
-                              : Icons.expand_more,
+                          Icons.chevron_right,
                           size: 20,
                           color: Colors.grey[500],
-                        ),
-                        const SizedBox(width: 4),
-                        Text(
-                          'Custom proxy and dashboard details',
-                          style: TextStyle(
-                            color: Colors.grey[500],
-                            fontSize: 13,
-                          ),
                         ),
                       ],
                     ),
                   ),
                 ),
               ),
-              if (_showDashboard) ...[
-                const SizedBox(height: 8),
-                Semantics(
-                  identifier: HermesSemanticsId.connectionGatewayPrefix,
-                  textField: true,
-                  child: TextField(
-                    controller: _gatewayPrefix,
-                    decoration: const InputDecoration(
-                      labelText: 'Gateway path prefix',
-                      hintText:
-                          'e.g. /personal (blank uses default Organizator)',
-                    ),
-                    autocorrect: false,
-                  ),
-                ),
-                Semantics(
-                  identifier: HermesSemanticsId.connectionAtlasOwner,
-                  child: SwitchListTile(
-                    value: _atlasOwnerEnabled,
-                    contentPadding: EdgeInsets.zero,
-                    title: const Text('ATLAS owner enrichment'),
-                    subtitle: const Text(
-                      'Optional. Generic Hermes remains the default; the server '
-                      'still authenticates and owns Profile and Project state.',
-                    ),
-                    onChanged: _validating
-                        ? null
-                        : (value) => setState(() => _atlasOwnerEnabled = value),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                Semantics(
-                  identifier: HermesSemanticsId.connectionDashboardPrefix,
-                  textField: true,
-                  child: TextField(
-                    controller: _dashboardPrefix,
-                    decoration: const InputDecoration(
-                      labelText: 'Dashboard path prefix',
-                      hintText: 'e.g. /dashboard (proxy path before /api/)',
-                    ),
-                    autocorrect: false,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Semantics(
-                  identifier: HermesSemanticsId.connectionDashboardProxied,
-                  child: SwitchListTile(
-                    value: _dashboardProxied,
-                    contentPadding: EdgeInsets.zero,
-                    title: const Text('Dashboard behind proxy'),
-                    subtitle: const Text(
-                      'Nginx injects auth — app sends clean requests',
-                    ),
-                    onChanged: (v) => setState(() => _dashboardProxied = v),
-                  ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 4),
-                  child: Text(
-                    'Optional. For the Memory/Cron/Skills/Settings tabs. Leave '
-                    'blank to use the default dashboard port (9119) with no login.',
-                    style: TextStyle(color: Colors.grey[600], fontSize: 12),
-                  ),
-                ),
-                Semantics(
-                  identifier: HermesSemanticsId.connectionDashboardPort,
-                  textField: true,
-                  child: TextField(
-                    controller: _dashPort,
-                    decoration: const InputDecoration(
-                      labelText: 'Dashboard Port',
-                      hintText: 'Leave blank for default (9119)',
-                    ),
-                    keyboardType: TextInputType.number,
-                  ),
-                ),
-                const SizedBox(height: 12),
-                Semantics(
-                  identifier: HermesSemanticsId.connectionDashboardUsername,
-                  textField: true,
-                  child: TextField(
-                    controller: _dashUser,
-                    decoration: const InputDecoration(
-                      labelText: 'Dashboard Username (optional)',
-                    ),
-                    autocorrect: false,
-                  ),
-                ),
-                const SizedBox(height: 12),
-                Semantics(
-                  identifier: HermesSemanticsId.connectionDashboardPassword,
-                  textField: true,
-                  obscured: true,
-                  child: TextField(
-                    controller: _dashPass,
-                    decoration: const InputDecoration(
-                      labelText: 'Dashboard Password (optional)',
-                    ),
-                    obscureText: true,
-                  ),
-                ),
-                const SizedBox(height: 12),
-                Semantics(
-                  identifier: HermesSemanticsId.connectionDesktopGatewayUrl,
-                  textField: true,
-                  child: TextField(
-                    controller: _desktopGatewayUrl,
-                    decoration: const InputDecoration(
-                      labelText: 'Desktop Gateway URL (optional)',
-                      hintText: 'https://hermes-desktop.example.lan',
-                      helperText:
-                          'Enables file attachments through the Desktop remote gateway.',
-                    ),
-                    keyboardType: TextInputType.url,
-                    autocorrect: false,
-                  ),
-                ),
-              ],
             ],
           ),
         ),
@@ -1390,5 +1298,310 @@ class _AddDialogState extends State<_AddDialog> {
     _dashPass.dispose();
     _desktopGatewayUrl.dispose();
     super.dispose();
+  }
+}
+
+enum _AdvancedConnectionPanel { proxy, dashboard, desktop }
+
+class _AdvancedConnectionSwitches {
+  final bool atlasOwnerEnabled;
+  final bool dashboardProxied;
+
+  const _AdvancedConnectionSwitches({
+    required this.atlasOwnerEnabled,
+    required this.dashboardProxied,
+  });
+}
+
+class _AdvancedConnectionDetailsDialog extends StatefulWidget {
+  final TextEditingController gatewayPrefix;
+  final TextEditingController dashboardPrefix;
+  final TextEditingController dashboardPort;
+  final TextEditingController dashboardUsername;
+  final TextEditingController dashboardPassword;
+  final TextEditingController desktopGatewayUrl;
+  final bool atlasOwnerEnabled;
+  final bool dashboardProxied;
+
+  const _AdvancedConnectionDetailsDialog({
+    required this.gatewayPrefix,
+    required this.dashboardPrefix,
+    required this.dashboardPort,
+    required this.dashboardUsername,
+    required this.dashboardPassword,
+    required this.desktopGatewayUrl,
+    required this.atlasOwnerEnabled,
+    required this.dashboardProxied,
+  });
+
+  @override
+  State<_AdvancedConnectionDetailsDialog> createState() =>
+      _AdvancedConnectionDetailsDialogState();
+}
+
+class _AdvancedConnectionDetailsDialogState
+    extends State<_AdvancedConnectionDetailsDialog> {
+  _AdvancedConnectionPanel _panel = _AdvancedConnectionPanel.proxy;
+  late bool _atlasOwnerEnabled;
+  late bool _dashboardProxied;
+
+  @override
+  void initState() {
+    super.initState();
+    _atlasOwnerEnabled = widget.atlasOwnerEnabled;
+    _dashboardProxied = widget.dashboardProxied;
+  }
+
+  void _selectPanel(_AdvancedConnectionPanel panel) {
+    FocusManager.instance.primaryFocus?.unfocus();
+    setState(() => _panel = panel);
+  }
+
+  void _done() {
+    FocusManager.instance.primaryFocus?.unfocus();
+    Navigator.pop(
+      context,
+      _AdvancedConnectionSwitches(
+        atlasOwnerEnabled: _atlasOwnerEnabled,
+        dashboardProxied: _dashboardProxied,
+      ),
+    );
+  }
+
+  Widget _panelButton({
+    required String identifier,
+    required _AdvancedConnectionPanel panel,
+    required String label,
+  }) {
+    final selected = _panel == panel;
+    return Expanded(
+      child: Semantics(
+        identifier: identifier,
+        button: true,
+        selected: selected,
+        onTap: () => _selectPanel(panel),
+        child: TextButton(
+          onPressed: () => _selectPanel(panel),
+          style: TextButton.styleFrom(
+            foregroundColor: selected
+                ? Theme.of(context).colorScheme.primary
+                : Theme.of(context).colorScheme.onSurfaceVariant,
+          ),
+          child: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis),
+        ),
+      ),
+    );
+  }
+
+  Widget _proxyPanel() {
+    return Column(
+      key: const ValueKey(_AdvancedConnectionPanel.proxy),
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Semantics(
+          identifier: HermesSemanticsId.connectionGatewayPrefix,
+          textField: true,
+          child: TextField(
+            controller: widget.gatewayPrefix,
+            decoration: const InputDecoration(
+              labelText: 'Gateway path prefix',
+              hintText: 'e.g. /personal (blank uses default Organizator)',
+            ),
+            autocorrect: false,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Semantics(
+          identifier: HermesSemanticsId.connectionAtlasOwner,
+          toggled: _atlasOwnerEnabled,
+          onTap: () => setState(() => _atlasOwnerEnabled = !_atlasOwnerEnabled),
+          child: SwitchListTile(
+            value: _atlasOwnerEnabled,
+            contentPadding: EdgeInsets.zero,
+            title: const Text('ATLAS owner enrichment'),
+            subtitle: const Text(
+              'Optional. Generic Hermes remains the default; the server still '
+              'authenticates and owns Profile and Project state.',
+            ),
+            onChanged: (value) => setState(() => _atlasOwnerEnabled = value),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _dashboardPanel() {
+    return Column(
+      key: const ValueKey(_AdvancedConnectionPanel.dashboard),
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Semantics(
+          identifier: HermesSemanticsId.connectionDashboardPrefix,
+          textField: true,
+          child: TextField(
+            controller: widget.dashboardPrefix,
+            decoration: const InputDecoration(
+              labelText: 'Dashboard path prefix',
+              hintText: 'e.g. /dashboard (proxy path before /api/)',
+            ),
+            autocorrect: false,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Semantics(
+          identifier: HermesSemanticsId.connectionDashboardProxied,
+          toggled: _dashboardProxied,
+          onTap: () => setState(() => _dashboardProxied = !_dashboardProxied),
+          child: SwitchListTile(
+            value: _dashboardProxied,
+            contentPadding: EdgeInsets.zero,
+            title: const Text('Dashboard behind proxy'),
+            subtitle: const Text(
+              'Nginx injects auth — app sends clean requests',
+            ),
+            onChanged: (value) => setState(() => _dashboardProxied = value),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.only(bottom: 4),
+          child: Text(
+            'Optional. Leave blank to use dashboard port 9119 with no login.',
+            style: TextStyle(color: Colors.grey[600], fontSize: 12),
+          ),
+        ),
+        Semantics(
+          identifier: HermesSemanticsId.connectionDashboardPort,
+          textField: true,
+          child: TextField(
+            controller: widget.dashboardPort,
+            decoration: const InputDecoration(
+              labelText: 'Dashboard Port',
+              hintText: 'Leave blank for default (9119)',
+            ),
+            keyboardType: TextInputType.number,
+          ),
+        ),
+        const SizedBox(height: 12),
+        Semantics(
+          identifier: HermesSemanticsId.connectionDashboardUsername,
+          textField: true,
+          child: TextField(
+            controller: widget.dashboardUsername,
+            decoration: const InputDecoration(
+              labelText: 'Dashboard Username (optional)',
+            ),
+            autocorrect: false,
+          ),
+        ),
+        const SizedBox(height: 12),
+        Semantics(
+          identifier: HermesSemanticsId.connectionDashboardPassword,
+          textField: true,
+          obscured: true,
+          child: TextField(
+            controller: widget.dashboardPassword,
+            decoration: const InputDecoration(
+              labelText: 'Dashboard Password (optional)',
+            ),
+            obscureText: true,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _desktopPanel() {
+    return Column(
+      key: const ValueKey(_AdvancedConnectionPanel.desktop),
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Semantics(
+          identifier: HermesSemanticsId.connectionDesktopGatewayUrl,
+          textField: true,
+          child: TextField(
+            controller: widget.desktopGatewayUrl,
+            decoration: const InputDecoration(
+              labelText: 'Desktop Gateway URL (optional)',
+              hintText: 'https://hermes-desktop.example.lan',
+              helperText:
+                  'Enables file attachments through the Desktop remote gateway.',
+            ),
+            keyboardType: TextInputType.url,
+            autocorrect: false,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _selectedPanel() => switch (_panel) {
+    _AdvancedConnectionPanel.proxy => _proxyPanel(),
+    _AdvancedConnectionPanel.dashboard => _dashboardPanel(),
+    _AdvancedConnectionPanel.desktop => _desktopPanel(),
+  };
+
+  @override
+  Widget build(BuildContext context) {
+    final contentHeight = (MediaQuery.sizeOf(context).height * 0.66)
+        .clamp(380.0, 620.0)
+        .toDouble();
+    return PopScope(
+      canPop: false,
+      child: Semantics(
+        identifier: HermesSemanticsId.connectionAdvancedDialog,
+        container: true,
+        explicitChildNodes: true,
+        scopesRoute: true,
+        namesRoute: true,
+        label: 'Advanced connection details dialog',
+        child: AlertDialog(
+          title: const Text('Advanced connection details'),
+          content: SizedBox(
+            width: 520,
+            height: contentHeight,
+            child: Column(
+              children: [
+                Row(
+                  children: [
+                    _panelButton(
+                      identifier: HermesSemanticsId.connectionAdvancedProxyTab,
+                      panel: _AdvancedConnectionPanel.proxy,
+                      label: 'Proxy',
+                    ),
+                    _panelButton(
+                      identifier:
+                          HermesSemanticsId.connectionAdvancedDashboardTab,
+                      panel: _AdvancedConnectionPanel.dashboard,
+                      label: 'Dashboard',
+                    ),
+                    _panelButton(
+                      identifier:
+                          HermesSemanticsId.connectionAdvancedDesktopTab,
+                      panel: _AdvancedConnectionPanel.desktop,
+                      label: 'Desktop',
+                    ),
+                  ],
+                ),
+                const Divider(),
+                Expanded(
+                  child: SingleChildScrollView(
+                    primary: false,
+                    child: _selectedPanel(),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            Semantics(
+              identifier: HermesSemanticsId.connectionAdvancedDone,
+              button: true,
+              onTap: _done,
+              child: FilledButton(onPressed: _done, child: const Text('Done')),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
