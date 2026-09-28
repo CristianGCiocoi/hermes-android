@@ -4,6 +4,33 @@ All notable changes to this project are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Release notes for
 versions prior to 1.0.7 are in the **What's new** sections of the [README](README.md).
 
+## [1.0.33-hermesapk.33] - 2026-09-28
+
+### Fixed
+
+- Propagated the saved connection's `dashboard_proxied` mode into the Desktop
+  Gateway authentication client. Proxied connections now request the
+  WebSocket ticket directly instead of incorrectly scraping the Dashboard SPA
+  for a session token.
+- Restored authenticated session initialization and retained Notification
+  reconciliation for proxy-terminated Remote Gateway deployments that do not
+  store a local Dashboard username/password.
+
+### Compatibility and authority
+
+- Password-authenticated and insecure/open Dashboard modes retain their
+  existing behavior.
+- Generic Gateways still receive zero Notification RPCs when the exact
+  capability is absent.
+- Android remains a presentation and factual-delivery client; server-side
+  Notification semantics and lifecycle authority are unchanged.
+
+### Verification
+
+- Added an adversarial proxy-topology regression that rejects every fallback
+  authentication request and requires the exact `ws-ticket → session.resume →
+  notification.pull` path without Cookie or SPA token headers.
+
 ## [1.0.32-hermesapk.32] - 2026-09-28
 
 ### Fixed
