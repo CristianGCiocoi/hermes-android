@@ -23,7 +23,7 @@ official Hermes Agent or Nous Research release.
 
 ## Current release
 
-- Version: **1.0.31-hermesapk.31**
+- Version: **1.0.32-hermesapk.32**
 - Test package: `com.hermesagent.hermes_android.dev`
 - Recommended APK for modern phones: ARM64 debug test build from this
   repository's Releases page.
@@ -80,9 +80,10 @@ passwords, prompts, and message text are never identifier components.
   are no longer duplicated in the top-right panel.
 - Optional Hermes-owned Android notification delivery, negotiated per Desktop
   Gateway connection. Android requests notification permission normally,
-  consumes one pending notification per authenticated session/socket, and
-  reports only the native factual delivery outcome. Unsupported Gateways
-  receive no notification RPCs.
+  reconciles pending delivery when the chat opens and whenever the app resumes,
+  and reports only the native factual delivery outcome. Simultaneous pulls and
+  duplicate presentation revisions are coalesced. Unsupported Gateways receive
+  no notification RPCs.
 - Native Hermes Projects, per-session Standard/Full control permissions,
   selectable color palettes, improved long-chat scrolling, and consolidated
   message actions.
@@ -170,7 +171,7 @@ Download the community test APK from this repository's
 For most Android phones, install the arm64 APK:
 
 ```bash
-adb install -r Hermes-Agent-Dev-1.0.31-hermesapk.31-arm64-debug.apk
+adb install -r Hermes-Agent-Dev-1.0.32-hermesapk.32-arm64-debug.apk
 ```
 
 If sideloading directly on Android, enable **Install unknown apps** for your browser or file manager, then open the downloaded APK.
