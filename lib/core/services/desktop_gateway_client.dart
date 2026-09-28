@@ -44,6 +44,9 @@ class DesktopGatewayClient {
   GatewayInteractionModeCapability? _interactionModeCapability;
   GatewayNotificationDeliveryCapability? _notificationDeliveryCapability;
   final Map<String, Future<bool>> _notificationPulls = {};
+  Future<WsClient>? _socketConnection;
+  final Map<String, Future<_DesktopGatewaySession>> _openingSessions = {};
+  bool _closed = false;
   DesktopAsyncEventCallback? _asyncEventListener;
   DesktopConnectionCallback? _connectionListener;
   DesktopSessionPermissionCallback? _sessionPermissionListener;
@@ -123,7 +126,30 @@ class DesktopGatewayClient {
     if (mappedSessionId != null) {
       return _DesktopGatewaySession(client, mappedSessionId);
     }
+
+    final pending = _openingSessions[mobileSessionId];
+    if (pending != null) return pending;
+    final opening = _openSession(client, mobileSessionId);
+    _openingSessions[mobileSessionId] = opening;
+    try {
+      return await opening;
+    } finally {
+      if (identical(_openingSessions[mobileSessionId], opening)) {
+        _openingSessions.remove(mobileSessionId);
+      }
+    }
+  }
+
+  Future<_DesktopGatewaySession> _openSession(
+    WsClient client,
+    String mobileSessionId,
+  ) async {
     final opened = await _resumeOrCreate(client, mobileSessionId);
+    if (!identical(_ws, client)) {
+      throw StateError(
+        'Desktop Gateway connection changed while opening session',
+      );
+    }
     _gatewaySessionIds[mobileSessionId] = opened.sessionId;
     final effective = opened.effectiveFullControl;
     if (effective != null) {
@@ -133,9 +159,24 @@ class DesktopGatewayClient {
   }
 
   Future<WsClient> _connectSocket() async {
+    if (_closed) throw StateError('Desktop Gateway client is closed');
     final existing = _ws;
     if (existing != null && existing.isConnected) return existing;
+    final pending = _socketConnection;
+    if (pending != null) return pending;
 
+    final connecting = _openSocket(existing);
+    _socketConnection = connecting;
+    try {
+      return await connecting;
+    } finally {
+      if (identical(_socketConnection, connecting)) {
+        _socketConnection = null;
+      }
+    }
+  }
+
+  Future<WsClient> _openSocket(WsClient? existing) async {
     _connectionListener?.call(
       existing == null
           ? DesktopConnectionState.connecting
@@ -148,6 +189,7 @@ class DesktopGatewayClient {
     _interactionModeCapability = null;
     _notificationDeliveryCapability = null;
     _notificationPulls.clear();
+    _openingSessions.clear();
     final ticket = await _dashboard.mintWebSocketTicket();
     final client = WsClient(_baseUrl, ticket: ticket);
     _installAsyncEventBridge(client);
@@ -161,11 +203,16 @@ class DesktopGatewayClient {
         _interactionModeCapability = null;
         _notificationDeliveryCapability = null;
         _notificationPulls.clear();
+        _openingSessions.clear();
         _connectionListener?.call(DesktopConnectionState.disconnected);
       }
     };
     try {
       await client.connect();
+      if (_closed) {
+        client.close();
+        throw StateError('Desktop Gateway client is closed');
+      }
       _ws = client;
       return client;
     } catch (_) {
@@ -347,17 +394,28 @@ class DesktopGatewayClient {
     return (await _notificationCapabilityFor(gateway.client)).supported;
   }
 
-  /// Pulls at most once for a mapped session on the current authenticated
-  /// socket. Unsupported and malformed capabilities cause zero notification
-  /// RPCs, preserving compatibility with generic and older Gateways.
-  Future<bool> pullPendingNotification({required String sessionId}) {
-    return _notificationPulls.putIfAbsent(sessionId, () async {
+  /// Reconciles pending delivery on the current authenticated session.
+  /// Concurrent calls are coalesced, while a later lifecycle reconciliation
+  /// is allowed to pull again. Unsupported and malformed capabilities cause
+  /// zero notification RPCs, preserving compatibility with generic Gateways.
+  Future<bool> pullPendingNotification({required String sessionId}) async {
+    final pending = _notificationPulls[sessionId];
+    if (pending != null) return pending;
+    final pulling = () async {
       final gateway = await _connect(sessionId);
       final capability = await _notificationCapabilityFor(gateway.client);
       if (!capability.supported) return false;
       await gateway.client.pullNotification(gateway.sessionId);
       return true;
-    });
+    }();
+    _notificationPulls[sessionId] = pulling;
+    try {
+      return await pulling;
+    } finally {
+      if (identical(_notificationPulls[sessionId], pulling)) {
+        _notificationPulls.remove(sessionId);
+      }
+    }
   }
 
   Future<GatewayNotificationDeliveryReceipt> recordNotificationDeliveryResult({
@@ -690,6 +748,7 @@ class DesktopGatewayClient {
   }
 
   void close() {
+    _closed = true;
     _asyncEventListener = null;
     _connectionListener = null;
     _sessionPermissionListener = null;
@@ -702,6 +761,7 @@ class DesktopGatewayClient {
     _interactionModeCapability = null;
     _notificationDeliveryCapability = null;
     _notificationPulls.clear();
+    _openingSessions.clear();
     final turnCoordinatorRegistry = _turnCoordinatorRegistry;
     _turnCoordinatorRegistry = null;
     if (turnCoordinatorRegistry != null) {

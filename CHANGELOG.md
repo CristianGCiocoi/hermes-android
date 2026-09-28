@@ -4,6 +4,32 @@ All notable changes to this project are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Release notes for
 versions prior to 1.0.7 are in the **What's new** sections of the [README](README.md).
 
+## [1.0.32-hermesapk.32] - 2026-09-28
+
+### Fixed
+
+- Notification delivery now reconciles independently from optional
+  Standard/Interview/Grill state. A failed interaction-mode read no longer
+  prevents an advertised `notification.pull`.
+- Pending notifications are checked again on later app resumes. Only
+  simultaneous pulls are coalesced; a failed or empty pull is no longer cached
+  for the lifetime of the authenticated socket.
+- Concurrent Desktop connection/session initialization is serialized so one
+  chat cannot race itself into multiple sockets or duplicate session opens.
+- Duplicate `notification.show` events for the same notification revision are
+  coalesced locally. Android keeps the deterministic native result reference
+  and reports only the factual delivery outcome.
+
+### Compatibility and safety
+
+- Generic and older Gateways remain unchanged: no notification RPC is sent
+  unless the exact `hermes.notification.delivery.v1` capability is advertised.
+- Pull acknowledgements are now strict and fail closed when malformed. Android
+  remains a presentation and delivery-result adapter; it does not own or infer
+  semantic Notification lifecycle state.
+- The flow reuses the existing authenticated Desktop connection/session and
+  does not submit a prompt, start an agent, select a model, or invoke a model.
+
 ## [1.0.31-hermesapk.31] - 2026-09-27
 
 ### Fixed

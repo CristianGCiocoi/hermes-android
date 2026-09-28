@@ -18,12 +18,14 @@ import '../services/connection_manager.dart';
 import '../services/attachment_draft_service.dart';
 import '../services/chat_model_override_store.dart';
 import '../services/desktop_gateway_client.dart';
+import '../services/desktop_session_feature_reconciler.dart';
 import '../services/gateway_activity_center_controller.dart';
 import '../services/gateway_turn_application_controller.dart';
 import '../services/gateway_turn_coordinator.dart';
 import '../services/gateway_turn_recovery.dart';
 import '../services/gateway_turn_ui_projection.dart';
 import '../services/local_notification_service.dart';
+import '../services/notification_delivery_deduplicator.dart';
 import '../services/voice_composer_adapter.dart';
 import '../services/ws_client.dart';
 import '../models/attachment_draft.dart';
@@ -181,6 +183,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   late final Future<void> _sessionModelRestore;
   final LocalNotificationService _localNotificationService =
       LocalNotificationService();
+  final NotificationDeliveryDeduplicator _notificationDeliveries =
+      NotificationDeliveryDeduplicator();
   DesktopGatewayClient? _desktopGateway;
   GatewayTurnApplicationSession? _turnApplicationSession;
   DesktopConnectionState _desktopConnectionState =
@@ -404,27 +408,25 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   Future<void> _ensureDesktopSession() async {
     final gateway = _desktopGateway;
     if (gateway == null) return;
-    try {
-      final effective = await gateway.ensureSession(widget.session.id);
-      final interaction = await gateway.getInteractionModeState(
-        sessionId: widget.session.id,
-      );
-      if (await gateway.supportsNotificationDelivery(
-        sessionId: widget.session.id,
-      )) {
+    final reconciliation = await reconcileDesktopSessionFeatures(
+      ensureSession: () => gateway.ensureSession(widget.session.id),
+      readInteractionMode: () =>
+          gateway.getInteractionModeState(sessionId: widget.session.id),
+      supportsNotificationDelivery: () =>
+          gateway.supportsNotificationDelivery(sessionId: widget.session.id),
+      requestNotificationPermission: () async {
         await _localNotificationService.requestPermission();
-        await gateway.pullPendingNotification(sessionId: widget.session.id);
-      }
-      if (mounted) {
-        setState(() {
-          if (effective != null) _effectiveFullControl = effective;
-          _interactionModeState = interaction;
-        });
-      }
-    } catch (_) {
-      // The composer remains available. The next send retries with a fresh
-      // single-use ticket and surfaces an actionable error if it still fails.
-    }
+      },
+      pullNotification: () =>
+          gateway.pullPendingNotification(sessionId: widget.session.id),
+    );
+    if (!mounted || reconciliation == null) return;
+    setState(() {
+      final effective = reconciliation.effectiveFullControl;
+      if (effective != null) _effectiveFullControl = effective;
+      final interaction = reconciliation.interactionMode;
+      if (interaction != null) _interactionModeState = interaction;
+    });
   }
 
   void _editAndResend(String text) {
@@ -2436,13 +2438,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       final gateway = _desktopGateway;
       if (delivery != null && gateway != null) {
         try {
-          final result = await _localNotificationService.show(notification);
-          await gateway.recordNotificationDeliveryResult(
-            sessionId: widget.session.id,
-            notificationId: delivery.notificationId,
-            expectedVersion: delivery.version,
-            resultRef: result.resultRef,
-            outcome: result.outcome,
+          await _deliverGatewayNotification(
+            gateway: gateway,
+            notification: notification,
           );
         } catch (_) {
           // An unknown platform or transport outcome is never reported as a
@@ -2465,6 +2463,28 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     if (notice == null) return;
     if (!_activityCenter.addNotice(notice)) return;
     _scheduleStreamingFollow();
+  }
+
+  Future<void> _deliverGatewayNotification({
+    required DesktopGatewayClient gateway,
+    required GatewayNotification notification,
+  }) async {
+    final delivery = notification.delivery;
+    if (delivery == null) return;
+    await _notificationDeliveries.deliver(
+      notificationId: delivery.notificationId,
+      version: delivery.version,
+      operation: () async {
+        final result = await _localNotificationService.show(notification);
+        await gateway.recordNotificationDeliveryResult(
+          sessionId: widget.session.id,
+          notificationId: delivery.notificationId,
+          expectedVersion: delivery.version,
+          resultRef: result.resultRef,
+          outcome: result.outcome,
+        );
+      },
+    );
   }
 
   void _upsertSubagent(String eventType, Map<String, dynamic> data) {

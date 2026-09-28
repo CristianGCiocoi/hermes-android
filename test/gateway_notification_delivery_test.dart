@@ -121,6 +121,38 @@ void main() {
     });
   });
 
+  group('GatewayNotificationPullResult', () {
+    test('accepts only exact claimed and empty acknowledgements', () {
+      final claimed = GatewayNotificationPullResult.fromResult({
+        'notification_id': 'notice-42',
+        'version': 2,
+      });
+      expect(claimed, isNotNull);
+      expect(claimed!.claimed, isTrue);
+      expect(claimed.notificationId, 'notice-42');
+      expect(claimed.version, 2);
+
+      final empty = GatewayNotificationPullResult.fromResult({
+        'notification': null,
+      });
+      expect(empty, isNotNull);
+      expect(empty!.claimed, isFalse);
+    });
+
+    test('rejects malformed or expanded acknowledgements', () {
+      for (final malformed in [
+        <String, dynamic>{},
+        {'notification': null, 'extra': true},
+        {'notification_id': ' notice-42', 'version': 2},
+        {'notification_id': 'notice-42', 'version': true},
+        {'notification_id': 'notice-42', 'version': 0},
+        {'notification_id': 'notice-42', 'version': 2, 'extra': true},
+      ]) {
+        expect(GatewayNotificationPullResult.fromResult(malformed), isNull);
+      }
+    });
+  });
+
   test('generic Gateway sends zero notification RPCs', () async {
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     final methods = <String>[];
@@ -181,11 +213,12 @@ void main() {
   });
 
   test(
-    'capable Gateway gets one pull and one factual result callback',
+    'capable Gateway coalesces concurrent pulls and reconciles again later',
     () async {
       final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
       final methods = <String>[];
       final eventSeen = Completer<void>();
+      var pullCount = 0;
       final subscription = server.listen((request) async {
         if (WebSocketTransformer.isUpgradeRequest(request)) {
           final socket = await WebSocketTransformer.upgrade(request);
@@ -206,32 +239,37 @@ void main() {
                 }),
               );
             } else if (method == 'notification.pull') {
-              socket.add(
-                jsonEncode({
-                  'jsonrpc': '2.0',
-                  'method': 'event',
-                  'params': {
-                    'type': 'notification.show',
-                    'session_id': 'live-1',
-                    'payload': {
-                      'key': 'notice-1',
-                      'level': 'info',
-                      'text': 'A Hermes task completed.',
-                      'delivery': {
-                        'contract': 'hermes.notification.presentation.v1',
-                        'notification_id': 'notice-1',
-                        'version': 2,
-                        'title': 'Hermes task complete',
+              pullCount++;
+              if (pullCount == 1) {
+                socket.add(
+                  jsonEncode({
+                    'jsonrpc': '2.0',
+                    'method': 'event',
+                    'params': {
+                      'type': 'notification.show',
+                      'session_id': 'live-1',
+                      'payload': {
+                        'key': 'notice-1',
+                        'level': 'info',
+                        'text': 'A Hermes task completed.',
+                        'delivery': {
+                          'contract': 'hermes.notification.presentation.v1',
+                          'notification_id': 'notice-1',
+                          'version': 2,
+                          'title': 'Hermes task complete',
+                        },
                       },
                     },
-                  },
-                }),
-              );
+                  }),
+                );
+              }
               socket.add(
                 jsonEncode({
                   'jsonrpc': '2.0',
                   'id': message['id'],
-                  'result': {'notification_id': 'notice-1', 'version': 2},
+                  'result': pullCount == 1
+                      ? {'notification_id': 'notice-1', 'version': 2}
+                      : {'notification': null},
                 }),
               );
             } else if (method == 'notification.delivery_result') {
@@ -282,14 +320,11 @@ void main() {
           await client.supportsNotificationDelivery(sessionId: 'mobile-1'),
           isTrue,
         );
-        expect(
-          await client.pullPendingNotification(sessionId: 'mobile-1'),
-          isTrue,
-        );
-        expect(
-          await client.pullPendingNotification(sessionId: 'mobile-1'),
-          isTrue,
-        );
+        final pulls = await Future.wait([
+          client.pullPendingNotification(sessionId: 'mobile-1'),
+          client.pullPendingNotification(sessionId: 'mobile-1'),
+        ]);
+        expect(pulls, everyElement(isTrue));
         await eventSeen.future;
         final receipt = await client.recordNotificationDeliveryResult(
           sessionId: 'mobile-1',
@@ -299,10 +334,103 @@ void main() {
           outcome: GatewayNotificationDeliveryOutcome.delivered,
         );
         expect(receipt.version, 3);
+        expect(
+          await client.pullPendingNotification(sessionId: 'mobile-1'),
+          isTrue,
+        );
         expect(methods, [
           'session.resume',
           'notification.pull',
           'notification.delivery_result',
+          'notification.pull',
+        ]);
+      } finally {
+        client.close();
+        await subscription.cancel();
+        await server.close(force: true);
+      }
+    },
+  );
+
+  test(
+    'a failed pull is not cached and the next reconciliation retries',
+    () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      final methods = <String>[];
+      var pullCount = 0;
+      final subscription = server.listen((request) async {
+        if (WebSocketTransformer.isUpgradeRequest(request)) {
+          final socket = await WebSocketTransformer.upgrade(request);
+          socket.add(jsonEncode(_ready(_capability())));
+          socket.listen((raw) {
+            final message = jsonDecode(raw as String) as Map<String, dynamic>;
+            final method = message['method'] as String;
+            methods.add(method);
+            if (method == 'session.resume') {
+              socket.add(
+                jsonEncode({
+                  'jsonrpc': '2.0',
+                  'id': message['id'],
+                  'result': {
+                    'session_id': 'live-retry',
+                    'info': <String, dynamic>{},
+                  },
+                }),
+              );
+            } else if (method == 'notification.pull') {
+              pullCount++;
+              socket.add(
+                jsonEncode(
+                  pullCount == 1
+                      ? {
+                          'jsonrpc': '2.0',
+                          'id': message['id'],
+                          'error': {
+                            'code': 5035,
+                            'message': 'temporarily unavailable',
+                          },
+                        }
+                      : {
+                          'jsonrpc': '2.0',
+                          'id': message['id'],
+                          'result': {'notification': null},
+                        },
+                ),
+              );
+            }
+          });
+        } else if (request.uri.path == '/auth/password-login') {
+          request.response
+            ..statusCode = HttpStatus.ok
+            ..headers.add('set-cookie', 'hermes_session_at=test; Path=/')
+            ..write('{}');
+          await request.response.close();
+        } else if (request.uri.path == '/api/auth/ws-ticket') {
+          request.response
+            ..statusCode = HttpStatus.ok
+            ..write(jsonEncode({'ticket': 'test-ticket'}));
+          await request.response.close();
+        } else {
+          request.response.statusCode = HttpStatus.notFound;
+          await request.response.close();
+        }
+      });
+      final client = DesktopGatewayClient.fromConnection(
+        _connection(server.port),
+      );
+      try {
+        await expectLater(
+          client.pullPendingNotification(sessionId: 'mobile-retry'),
+          throwsA(isA<Exception>()),
+        );
+        expect(
+          await client.pullPendingNotification(sessionId: 'mobile-retry'),
+          isTrue,
+        );
+        expect(methods, [
+          'session.resume',
+          'notification.pull',
+          'notification.pull',
         ]);
       } finally {
         client.close();

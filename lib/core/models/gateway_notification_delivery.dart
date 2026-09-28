@@ -113,6 +113,47 @@ class GatewayNotificationDeliveryProjection {
   }
 }
 
+/// Strict acknowledgement returned by `notification.pull`.
+///
+/// A pull either claims one exact notification revision or reports that the
+/// authenticated recipient currently has nothing pending. No semantic
+/// Notification state is inferred or stored by Android.
+class GatewayNotificationPullResult {
+  final String? notificationId;
+  final int? version;
+
+  const GatewayNotificationPullResult._({this.notificationId, this.version});
+
+  const GatewayNotificationPullResult.none() : this._();
+
+  bool get claimed => notificationId != null;
+
+  static GatewayNotificationPullResult? fromResult(Object? value) {
+    if (value is! Map<String, dynamic>) return null;
+    if (value.length == 1 &&
+        value.containsKey('notification') &&
+        value['notification'] == null) {
+      return const GatewayNotificationPullResult.none();
+    }
+    const exactKeys = <String>{'notification_id', 'version'};
+    final notificationId = value['notification_id'];
+    final version = value['version'];
+    if (value.length != exactKeys.length ||
+        !exactKeys.containsAll(value.keys) ||
+        notificationId is! String ||
+        !_isSafeWireText(notificationId, maxLength: 200) ||
+        version is! int ||
+        version is bool ||
+        version < 1) {
+      return null;
+    }
+    return GatewayNotificationPullResult._(
+      notificationId: notificationId,
+      version: version,
+    );
+  }
+}
+
 class GatewayNotificationDeliveryReceipt {
   final String notificationId;
   final int version;

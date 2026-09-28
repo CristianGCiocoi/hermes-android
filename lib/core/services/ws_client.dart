@@ -1013,7 +1013,9 @@ class WsClient {
     }
   }
 
-  Future<Map<String, dynamic>> pullNotification(String sessionId) async {
+  Future<GatewayNotificationPullResult> pullNotification(
+    String sessionId,
+  ) async {
     final response = await send('notification.pull', {'session_id': sessionId});
     final error = response['error'];
     if (error != null) {
@@ -1023,9 +1025,12 @@ class WsClient {
         fallbackMessage: 'Notification pull failed',
       );
     }
-    final result = response['result'];
-    if (result is Map<String, dynamic>) return result;
-    throw JsonRpcError('notification.pull', 'Gateway returned no pull result');
+    final result = GatewayNotificationPullResult.fromResult(response['result']);
+    if (result != null) return result;
+    throw JsonRpcError(
+      'notification.pull',
+      'Gateway returned an invalid pull result',
+    );
   }
 
   Future<GatewayNotificationDeliveryReceipt> recordNotificationDeliveryResult({

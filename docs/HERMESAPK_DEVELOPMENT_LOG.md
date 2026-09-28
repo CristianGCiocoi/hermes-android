@@ -73,6 +73,24 @@ local operator logs are intentionally excluded.
   background results, review summaries, and subagent status.
 - Deduplicated delayed or repeated events and bounded in-memory result storage.
 
+### Android notification delivery (`1.0.32-hermesapk.32`)
+
+- Reconciles notification delivery independently from optional interaction-mode
+  negotiation, so an unsupported or failing interaction RPC can no longer
+  suppress notifications.
+- Pulls an already-created retained notification through the authenticated
+  Desktop Gateway session without starting a model or agent run.
+- Presents the item through the Android notification channel after the
+  platform permission decision and reports only the factual delivery outcome
+  through the idempotent `notification.delivery_result` contract.
+- Parses `notification.pull` fail-closed and rejects malformed or extra fields.
+- Coalesces concurrent session opens and notification pulls while allowing a
+  later app-resume retry after an empty or failed pull.
+- Deduplicates repeated `(notification_id, version)` events with bounded local
+  retention. The Android client does not acquire semantic Notification
+  authority and generic Hermes gateways remain compatible with zero
+  notification RPCs.
+
 ### Build and distribution safety
 
 - Added a separate `.dev` Android application ID so the test build can coexist
@@ -82,9 +100,9 @@ local operator logs are intentionally excluded.
 - Kept the downloadable community artifact clearly labeled as a debug test
   build.
 
-## Validation
+## Current validation
 
-- 113 Flutter tests pass.
+- 417 Flutter tests pass.
 - Static analysis passes with `--fatal-infos`.
 - The synthetic gateway contract test covers authentication, session lifecycle,
   model/reasoning configuration, files, streaming, interruption, interactive
@@ -104,9 +122,11 @@ local operator logs are intentionally excluded.
   Gradle Plugin directly. This is non-blocking today, but the dependencies must
   migrate before a future Flutter release enforces built-in Kotlin.
 
-## Known release boundary
+## Current release boundary
 
-The published `.13` APK is signed with the standard Android Debug certificate.
-It is suitable for testing and private sideloading, not store or production
+The community APK line remains signed as an Android Debug test build. It is
+suitable for testing and private sideloading, not store or production
 distribution. No release keystore, gateway credential, operator profile, or
-private infrastructure data is included in this repository.
+private infrastructure data is included in this repository. Release notes are
+maintained cumulatively from the public `.13` baseline so users upgrading from
+that version can see the full set of changes.
