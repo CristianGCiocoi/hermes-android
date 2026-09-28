@@ -25,16 +25,18 @@ Map<String, dynamic> _capability() => {
   'methods': ['notification.pull', 'notification.delivery_result'],
 };
 
-SavedConnection _connection(int port) => SavedConnection(
-  id: 'notification-test',
-  label: 'Notification test',
-  host: '127.0.0.1',
-  port: port,
-  apiKey: '',
-  desktopGatewayUrl: 'http://127.0.0.1:$port',
-  dashboardUsername: 'test',
-  dashboardPassword: 'test',
-);
+SavedConnection _connection(int port, {bool dashboardProxied = false}) =>
+    SavedConnection(
+      id: 'notification-test',
+      label: 'Notification test',
+      host: '127.0.0.1',
+      port: port,
+      apiKey: '',
+      desktopGatewayUrl: 'http://127.0.0.1:$port',
+      dashboardProxied: dashboardProxied,
+      dashboardUsername: 'test',
+      dashboardPassword: 'test',
+    );
 
 String _resultRef(String character) =>
     'urn:hermes:android-delivery:${List.filled(64, character).join()}';
@@ -211,6 +213,81 @@ void main() {
       await server.close(force: true);
     }
   });
+
+  test(
+    'proxied saved connection mints a ticket directly and pulls without auth fallback',
+    () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      final httpPaths = <String>[];
+      final methods = <String>[];
+      final subscription = server.listen((request) async {
+        if (WebSocketTransformer.isUpgradeRequest(request)) {
+          final socket = await WebSocketTransformer.upgrade(request);
+          socket.add(jsonEncode(_ready(_capability())));
+          socket.listen((raw) {
+            final message = jsonDecode(raw as String) as Map<String, dynamic>;
+            final method = message['method'] as String;
+            methods.add(method);
+            if (method == 'session.resume') {
+              socket.add(
+                jsonEncode({
+                  'jsonrpc': '2.0',
+                  'id': message['id'],
+                  'result': {
+                    'session_id': 'live-proxied',
+                    'info': <String, dynamic>{},
+                  },
+                }),
+              );
+            } else if (method == 'notification.pull') {
+              socket.add(
+                jsonEncode({
+                  'jsonrpc': '2.0',
+                  'id': message['id'],
+                  'result': {'notification': null},
+                }),
+              );
+            }
+          });
+        } else {
+          httpPaths.add(request.uri.path);
+          expect(request.headers.value(HttpHeaders.cookieHeader), isNull);
+          expect(request.headers.value('x-hermes-session-token'), isNull);
+          if (request.uri.path == '/api/auth/ws-ticket') {
+            request.response
+              ..statusCode = HttpStatus.ok
+              ..write(jsonEncode({'ticket': 'proxied-ticket'}));
+          } else {
+            request.response.statusCode = HttpStatus.notFound;
+          }
+          await request.response.close();
+        }
+      });
+      final client = DesktopGatewayClient.fromConnection(
+        _connection(
+          server.port,
+          dashboardProxied: true,
+        ).copyWith(clearDashboardUsername: true, clearDashboardPassword: true),
+      );
+
+      try {
+        expect(
+          await client.supportsNotificationDelivery(sessionId: 'mobile-proxy'),
+          isTrue,
+        );
+        expect(
+          await client.pullPendingNotification(sessionId: 'mobile-proxy'),
+          isTrue,
+        );
+        expect(httpPaths, ['/api/auth/ws-ticket']);
+        expect(methods, ['session.resume', 'notification.pull']);
+      } finally {
+        client.close();
+        await subscription.cancel();
+        await server.close(force: true);
+      }
+    },
+  );
 
   test(
     'capable Gateway coalesces concurrent pulls and reconciles again later',

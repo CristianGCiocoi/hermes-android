@@ -91,6 +91,17 @@ local operator logs are intentionally excluded.
   authority and generic Hermes gateways remain compatible with zero
   notification RPCs.
 
+### Proxied notification-session correction (`1.0.33-hermesapk.33`)
+
+- Propagates the saved `dashboard_proxied` setting into the Desktop Gateway
+  authentication client.
+- Proxy-terminated connections now mint the WebSocket ticket directly and do
+  not fall back to Dashboard SPA token scraping when no local username and
+  password are stored.
+- Preserves the existing password-authenticated and insecure/open Dashboard
+  modes, generic Gateway compatibility, and server-side Notification
+  authority.
+
 ### Build and distribution safety
 
 - Added a separate `.dev` Android application ID so the test build can coexist
@@ -102,7 +113,7 @@ local operator logs are intentionally excluded.
 
 ## Current validation
 
-- 417 Flutter tests pass.
+- 418 Flutter tests pass.
 - Static analysis passes with `--fatal-infos`.
 - The synthetic gateway contract test covers authentication, session lifecycle,
   model/reasoning configuration, files, streaming, interruption, interactive
