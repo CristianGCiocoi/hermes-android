@@ -4,6 +4,25 @@ All notable changes to this project are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Release notes for
 versions prior to 1.0.7 are in the **What's new** sections of the [README](README.md).
 
+## [1.0.34-hermesapk.34] - 2026-09-29
+
+### Fixed
+
+- Replaced the Android Home-screen Add Connection action with a real native
+  `ImageButton` embedded in the Flutter layout. Android accessibility clients
+  now receive one stable native resource ID and the exact content description
+  `Add Connection`, without depending on Flutter's virtual semantics bridge.
+- Routed the native click back to the existing Flutter Add Gateway Connection
+  dialog through a value-free per-view method channel. No connection value,
+  credential, Gateway behavior, or authority boundary crosses this channel.
+
+### Verification boundary
+
+- Flutter tests still cover the fallback control and dialog contract.
+- Release acceptance additionally requires the packaged x86_64 APK to expose
+  and activate the native control through Android UIAutomator on the qualified
+  AVD. Flutter-only results are not sufficient for this release.
+
 ## [1.0.33-hermesapk.33] - 2026-09-28
 
 ### Fixed

@@ -20,6 +20,12 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        check(
+            flutterEngine.platformViewsController.registry.registerViewFactory(
+                NATIVE_ADD_CONNECTION_VIEW_TYPE,
+                NativeAddConnectionViewFactory(flutterEngine.dartExecutor.binaryMessenger),
+            ),
+        ) { "Native Add Connection view type was already registered" }
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, methodChannelName)
             .setMethodCallHandler { call, result ->
                 when (call.method) {
