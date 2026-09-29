@@ -38,6 +38,7 @@ abstract final class HermesSemanticsId {
       'hermes.connection.field.desktop_gateway_url';
   static const connectionCancel = 'hermes.connection.action.cancel';
   static const connectionConnect = 'hermes.connection.action.connect';
+  static const connectionSaveStatus = 'hermes.connection.save.status';
   static const newChat = 'hermes.chat.new';
   static const composer = 'hermes.chat.composer';
 

@@ -79,6 +79,7 @@ void main() {
         HermesSemanticsId.connectionHost,
         HermesSemanticsId.connectionPort,
         HermesSemanticsId.connectionApiKey,
+        HermesSemanticsId.connectionSaveStatus,
         HermesSemanticsId.connectionAdvanced,
         HermesSemanticsId.connectionCancel,
         HermesSemanticsId.connectionConnect,
@@ -250,6 +251,53 @@ void main() {
           .hasAction(SemanticsAction.tap),
       isTrue,
     );
+    semantics.dispose();
+  });
+
+  testWidgets('connection save publishes fixed value-free status', (
+    tester,
+  ) async {
+    final prefs = await SharedPreferences.getInstance();
+    final manager = ConnectionManager(prefs);
+    final semantics = tester.ensureSemantics();
+
+    await tester.pumpWidget(HermesApp(connManager: manager));
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.bySemanticsIdentifier(HermesSemanticsId.addConnection),
+    );
+    await tester.pumpAndSettle();
+
+    final statusFinder = find.bySemanticsIdentifier(
+      HermesSemanticsId.connectionSaveStatus,
+    );
+    expect(tester.getSemantics(statusFinder).label, 'Connection save ready');
+
+    await tester.enterText(
+      find.descendant(
+        of: find.bySemanticsIdentifier(HermesSemanticsId.connectionHost),
+        matching: find.byType(TextField),
+      ),
+      'example.invalid',
+    );
+    await tester.enterText(
+      find.descendant(
+        of: find.bySemanticsIdentifier(HermesSemanticsId.connectionApiKey),
+        matching: find.byType(TextField),
+      ),
+      'synthetic-test-only',
+    );
+    await tester.tap(
+      find.bySemanticsIdentifier(HermesSemanticsId.connectionConnect),
+    );
+    await tester.pumpAndSettle();
+
+    expect(tester.getSemantics(statusFinder).label, 'Connection save failed');
+    expect(
+      find.bySemanticsIdentifier(HermesSemanticsId.addConnectionDialog),
+      findsOneWidget,
+    );
+    expect(manager.getConnections(), isEmpty);
     semantics.dispose();
   });
 

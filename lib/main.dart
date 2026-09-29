@@ -238,6 +238,7 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   List<SavedConnection> _connections = [];
   bool _autoNavigated = false;
+  bool _connectionDialogOpen = false;
   static const String _lastConnectionKey = 'last_connection_id';
 
   void _refresh() {
@@ -295,68 +296,81 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  void _showAddDialog() => _showConnectionDialog();
+  void _showAddDialog() => unawaited(_showConnectionDialog());
 
   void _showEditConnectionDialog(SavedConnection conn) {
-    _showConnectionDialog(existing: conn);
+    unawaited(_showConnectionDialog(existing: conn));
   }
 
-  void _showConnectionDialog({SavedConnection? existing}) {
-    showDialog(
-      context: context,
-      builder: (_) => _AddDialog(
-        initialConnection: existing,
-        onSave:
-            (
-              label,
-              host,
-              port,
-              apiKey, {
-              gatewayPrefix,
-              atlasOwnerEnabled = false,
-              dashboardPrefix,
-              dashboardProxied = false,
-              desktopGatewayUrl,
-              dashboardPort,
-              dashboardUsername,
-              dashboardPassword,
-            }) async {
-              if (existing == null) {
-                await widget.connManager.saveConnection(
-                  label,
-                  host,
-                  port,
-                  apiKey,
-                  gatewayPrefix: gatewayPrefix,
-                  atlasOwnerEnabled: atlasOwnerEnabled,
-                  dashboardPrefix: dashboardPrefix,
-                  dashboardProxied: dashboardProxied,
-                  desktopGatewayUrl: desktopGatewayUrl,
-                  dashboardPort: dashboardPort,
-                  dashboardUsername: dashboardUsername,
-                  dashboardPassword: dashboardPassword,
-                );
-              } else {
-                await widget.connManager.updateConnection(
-                  existing.id,
-                  label,
-                  host,
-                  port,
-                  apiKey,
-                  gatewayPrefix: gatewayPrefix,
-                  atlasOwnerEnabled: atlasOwnerEnabled,
-                  dashboardPrefix: dashboardPrefix,
-                  dashboardProxied: dashboardProxied,
-                  desktopGatewayUrl: desktopGatewayUrl,
-                  dashboardPort: dashboardPort,
-                  dashboardUsername: dashboardUsername,
-                  dashboardPassword: dashboardPassword,
-                );
-              }
-              _refresh();
-            },
-      ),
-    );
+  Future<void> _showConnectionDialog({SavedConnection? existing}) async {
+    if (_connectionDialogOpen) return;
+    _connectionDialogOpen = true;
+    bool? saved;
+    try {
+      saved = await showDialog<bool>(
+        context: context,
+        builder: (_) => _AddDialog(
+          initialConnection: existing,
+          onSave:
+              (
+                label,
+                host,
+                port,
+                apiKey, {
+                gatewayPrefix,
+                atlasOwnerEnabled = false,
+                dashboardPrefix,
+                dashboardProxied = false,
+                desktopGatewayUrl,
+                dashboardPort,
+                dashboardUsername,
+                dashboardPassword,
+              }) async {
+                if (existing == null) {
+                  await widget.connManager.saveConnection(
+                    label,
+                    host,
+                    port,
+                    apiKey,
+                    gatewayPrefix: gatewayPrefix,
+                    atlasOwnerEnabled: atlasOwnerEnabled,
+                    dashboardPrefix: dashboardPrefix,
+                    dashboardProxied: dashboardProxied,
+                    desktopGatewayUrl: desktopGatewayUrl,
+                    dashboardPort: dashboardPort,
+                    dashboardUsername: dashboardUsername,
+                    dashboardPassword: dashboardPassword,
+                  );
+                } else {
+                  await widget.connManager.updateConnection(
+                    existing.id,
+                    label,
+                    host,
+                    port,
+                    apiKey,
+                    gatewayPrefix: gatewayPrefix,
+                    atlasOwnerEnabled: atlasOwnerEnabled,
+                    dashboardPrefix: dashboardPrefix,
+                    dashboardProxied: dashboardProxied,
+                    desktopGatewayUrl: desktopGatewayUrl,
+                    dashboardPort: dashboardPort,
+                    dashboardUsername: dashboardUsername,
+                    dashboardPassword: dashboardPassword,
+                  );
+                }
+              },
+        ),
+      );
+    } finally {
+      _connectionDialogOpen = false;
+    }
+    if (saved != true) return;
+
+    // Refresh only after the dialog route and its editable controls have
+    // detached. This prevents a Home rebuild from racing the reverse route
+    // and makes the newly durable card appear from one authoritative read.
+    await Future<void>.delayed(kThemeAnimationDuration);
+    if (mounted) _refresh();
   }
 
   void _showApiKeyDialog(SavedConnection conn) {
@@ -894,9 +908,21 @@ class _AddDialogState extends State<_AddDialog> {
   late bool _dashboardProxied;
   late bool _atlasOwnerEnabled;
   bool _validating = false;
+  _ConnectionSaveStage _saveStage = _ConnectionSaveStage.idle;
   String? _error;
 
   bool get _isEditing => widget.initialConnection != null;
+
+  String get _saveStageLabel => switch (_saveStage) {
+    _ConnectionSaveStage.idle => 'Connection save ready',
+    _ConnectionSaveStage.validatingGateway =>
+      'Connection save validating gateway',
+    _ConnectionSaveStage.validatingDashboard =>
+      'Connection save validating dashboard',
+    _ConnectionSaveStage.storing => 'Connection save storing',
+    _ConnectionSaveStage.stored => 'Connection save stored',
+    _ConnectionSaveStage.failed => 'Connection save failed',
+  };
 
   @override
   void initState() {
@@ -974,12 +1000,14 @@ class _AddDialogState extends State<_AddDialog> {
         _error =
             'ATLAS owner enrichment requires the default Organizator route '
             'or one exact Profile path such as /personal.';
+        _saveStage = _ConnectionSaveStage.failed;
       });
       return;
     }
 
     setState(() {
       _validating = true;
+      _saveStage = _ConnectionSaveStage.validatingGateway;
       _error = null;
     });
 
@@ -1009,6 +1037,7 @@ class _AddDialogState extends State<_AddDialog> {
               ? 'Server requires an API key. Enter your API_SERVER_KEY.'
               : 'Invalid API key. Server returned 401.';
           _validating = false;
+          _saveStage = _ConnectionSaveStage.failed;
         });
         return;
       }
@@ -1027,6 +1056,9 @@ class _AddDialogState extends State<_AddDialog> {
           dashPass.isNotEmpty ||
           dashboardPrefix.isNotEmpty ||
           _dashboardProxied) {
+        setState(() {
+          _saveStage = _ConnectionSaveStage.validatingDashboard;
+        });
         final dashClient = DashboardClient(
           host: normalized.host,
           port: SavedConnection(
@@ -1045,22 +1077,26 @@ class _AddDialogState extends State<_AddDialog> {
           password: dashPass.isEmpty ? null : dashPass,
         );
         try {
-          await dashClient.getModelInfo();
+          await dashClient.getModelInfo().timeout(const Duration(seconds: 10));
         } catch (_) {
-          dashClient.close();
           if (!mounted) return;
           setState(() {
             _error =
                 'Gateway connected, but the dashboard could not be reached or '
                 'authenticated. Check the dashboard details, or clear them to skip.';
             _validating = false;
+            _saveStage = _ConnectionSaveStage.failed;
           });
           return;
+        } finally {
+          dashClient.close();
         }
-        dashClient.close();
         if (!mounted) return;
       }
 
+      setState(() {
+        _saveStage = _ConnectionSaveStage.storing;
+      });
       await widget.onSave(
         label,
         host,
@@ -1082,18 +1118,26 @@ class _AddDialogState extends State<_AddDialog> {
         dashboardUsername: dashUser.isEmpty ? null : dashUser,
         dashboardPassword: dashPass.isEmpty ? null : dashPass,
       );
-      if (mounted) Navigator.pop(context);
+      if (!mounted) return;
+      setState(() {
+        _saveStage = _ConnectionSaveStage.stored;
+      });
+      FocusManager.instance.primaryFocus?.unfocus();
+      await WidgetsBinding.instance.endOfFrame;
+      if (mounted) Navigator.pop(context, true);
     } on CredentialStorageException {
       if (!mounted) return;
       setState(() {
         _error = 'The connection could not be stored securely.';
         _validating = false;
+        _saveStage = _ConnectionSaveStage.failed;
       });
     } catch (_) {
       if (!mounted) return;
       setState(() {
         _error = 'Cannot reach $host:$port. Check the host and port.';
         _validating = false;
+        _saveStage = _ConnectionSaveStage.failed;
       });
     }
   }
@@ -1152,6 +1196,22 @@ class _AddDialogState extends State<_AddDialog> {
                   ),
                 ),
               ],
+              Semantics(
+                identifier: HermesSemanticsId.connectionSaveStatus,
+                container: true,
+                liveRegion: true,
+                label: _saveStageLabel,
+                child: ExcludeSemantics(
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      _saveStageLabel,
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
               Semantics(
                 identifier: HermesSemanticsId.connectionLabel,
                 textField: true,
@@ -1292,6 +1352,15 @@ class _AddDialogState extends State<_AddDialog> {
     _desktopGatewayUrl.dispose();
     super.dispose();
   }
+}
+
+enum _ConnectionSaveStage {
+  idle,
+  validatingGateway,
+  validatingDashboard,
+  storing,
+  stored,
+  failed,
 }
 
 enum _AdvancedConnectionPanel { proxy, dashboard, desktop }
