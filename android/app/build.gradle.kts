@@ -8,7 +8,7 @@ plugins {
 
 val keystoreProperties = Properties()
 val keystorePath = rootProject.projectDir.parentFile.resolve("key.properties")
-val minimumInstalledVersionCode = 2144
+val minimumInstalledVersionCode = 2145
 if (keystorePath.exists()) {
    keystoreProperties.load(FileInputStream(keystorePath))
 }

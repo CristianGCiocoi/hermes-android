@@ -11,6 +11,7 @@ import 'core/services/text_size_preference.dart';
 import 'core/screens/session_list_screen.dart';
 import 'core/utils/responsive.dart';
 import 'core/widgets/hermes_brand_style.dart';
+import 'core/widgets/native_add_connection_button.dart';
 
 String? desktopGatewayUrlForConnectionSave(
   String value, {
@@ -849,16 +850,8 @@ class _HomeScreenState extends State<HomeScreen> {
                 );
               },
             ),
-      floatingActionButton: Semantics(
-        identifier: HermesSemanticsId.addConnection,
-        button: true,
-        label: 'Add Connection',
-        onTap: _showAddDialog,
-        child: FloatingActionButton(
-          tooltip: 'Add Connection',
-          onPressed: _showAddDialog,
-          child: const Icon(Icons.add, color: Colors.black),
-        ),
+      floatingActionButton: NativeAddConnectionButton(
+        onPressed: _showAddDialog,
       ),
     );
   }

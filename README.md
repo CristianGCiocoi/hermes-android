@@ -23,7 +23,7 @@ official Hermes Agent or Nous Research release.
 
 ## Current release
 
-- Version: **1.0.33-hermesapk.33**
+- Version: **1.0.34-hermesapk.34**
 - Test package: `com.hermesagent.hermes_android.dev`
 - Recommended APK for modern phones: ARM64 debug test build from this
   repository's Releases page.
@@ -171,7 +171,7 @@ Download the community test APK from this repository's
 For most Android phones, install the arm64 APK:
 
 ```bash
-adb install -r Hermes-Agent-Dev-1.0.33-hermesapk.33-arm64-debug.apk
+adb install -r Hermes-Agent-Dev-1.0.34-hermesapk.34-arm64-debug.apk
 ```
 
 If sideloading directly on Android, enable **Install unknown apps** for your browser or file manager, then open the downloaded APK.
