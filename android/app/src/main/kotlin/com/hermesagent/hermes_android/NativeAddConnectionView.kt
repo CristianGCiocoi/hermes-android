@@ -28,6 +28,8 @@ private class NativeAddConnectionView(
     messenger: BinaryMessenger,
 ) : PlatformView {
     private val channel = MethodChannel(messenger, "$CHANNEL_PREFIX/$viewId")
+    private var flutterReady = false
+    private var pendingPress = false
     private val button = ImageButton(context).apply {
         id = R.id.hermes_connection_add
         contentDescription = context.getString(
@@ -51,12 +53,39 @@ private class NativeAddConnectionView(
             (16f * resources.displayMetrics.density).toInt(),
             (16f * resources.displayMetrics.density).toInt(),
         )
-        setOnClickListener { channel.invokeMethod("pressed", null) }
+        setOnClickListener {
+            if (flutterReady) {
+                emitPressed()
+            } else {
+                // Coalesce taps received before Flutter installs its handler.
+                pendingPress = true
+            }
+        }
+    }
+
+    init {
+        channel.setMethodCallHandler { call, result ->
+            if (call.method != "ready") {
+                result.notImplemented()
+                return@setMethodCallHandler
+            }
+            flutterReady = true
+            result.success(null)
+            if (pendingPress) {
+                pendingPress = false
+                emitPressed()
+            }
+        }
+    }
+
+    private fun emitPressed() {
+        channel.invokeMethod("pressed", null)
     }
 
     override fun getView(): View = button
 
     override fun dispose() {
         button.setOnClickListener(null)
+        channel.setMethodCallHandler(null)
     }
 }

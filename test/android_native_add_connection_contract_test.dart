@@ -37,6 +37,13 @@ void main() {
     expect(source, contains('importantForAccessibility'));
     expect(source, contains('setOnClickListener'));
     expect(source, contains('channel.invokeMethod("pressed", null)'));
+    expect(source, contains('pendingPress = true'));
+    expect(source, contains('call.method != "ready"'));
+    expect(source, contains('if (pendingPress)'));
+    final dartSource = File(
+      'lib/core/widgets/native_add_connection_button.dart',
+    ).readAsStringSync();
+    expect(dartSource, contains("invokeMethod<void>('ready')"));
     expect(activity, contains('registerViewFactory('));
     expect(activity, contains('NATIVE_ADD_CONNECTION_VIEW_TYPE'));
   });

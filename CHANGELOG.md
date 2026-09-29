@@ -4,6 +4,29 @@ All notable changes to this project are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Release notes for
 versions prior to 1.0.7 are in the **What's new** sections of the [README](README.md).
 
+## [1.0.35-hermesapk.35] - 2026-09-29
+
+### Fixed
+
+- Added an explicit native/Flutter readiness handshake for the Android Add
+  Connection control. A native accessibility click received before Flutter has
+  installed its method-channel handler is now coalesced and delivered exactly
+  once after readiness instead of being lost.
+- Connection persistence now completes before the Add/Edit dialog reports
+  success. Home refreshes only after the dialog route and editable controls
+  have detached, eliminating the save/route teardown race.
+- Dashboard validation has a bounded ten-second deadline, so an unresponsive
+  optional Dashboard route cannot leave Connect spinning indefinitely without
+  either storing the connection or reporting a failure.
+
+### Qualification surface
+
+- The form publishes one stable, value-free save-status identifier with fixed
+  states for ready, Gateway validation, Dashboard validation, storage, stored,
+  and failed. It contains no label, host, route, credential, or error detail.
+- Existing durable metadata and secure credential readback remain the storage
+  authority; no fallback plaintext store or automatic submit was introduced.
+
 ## [1.0.34-hermesapk.34] - 2026-09-29
 
 ### Fixed

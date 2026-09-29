@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -34,6 +35,11 @@ class _NativeAddConnectionButtonState extends State<NativeAddConnectionButton> {
     final channel = MethodChannel('$nativeAddConnectionChannelPrefix/$viewId');
     _channel = channel;
     channel.setMethodCallHandler(_handleNativeCall);
+    // The Android view can become discoverable before Flutter has installed
+    // this handler. Complete an explicit handshake so a very early native
+    // accessibility click is queued by Android and delivered exactly once
+    // after Flutter is ready to open the dialog.
+    unawaited(channel.invokeMethod<void>('ready'));
   }
 
   @override
